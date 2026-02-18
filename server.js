@@ -401,9 +401,29 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
-// ═══════════════════════════════════════
-//  GAME STATE ROUTES
-// ═══════════════════════════════════════
+// Verify current token and return fresh user data from DB
+app.get("/api/auth/me", requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM users WHERE id = $1", [req.user.id]);
+    if (!result.rows.length) return res.status(401).json({ error: "User not found" });
+    const user = result.rows[0];
+    return res.json({
+      user: {
+        id:       user.id,
+        username: user.username,
+        isAdmin:  user.is_admin,
+        isOwner:  user.is_owner  || false,
+        isOwner2: user.is_owner2 || false,
+        isOG:     user.is_og     || false,
+        isMod:    user.is_mod    || false,
+        isVIP:    user.is_vip    || false,
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
 app.get("/api/game/load", requireAuth, async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM game_state WHERE user_id = $1", [req.user.id]);
