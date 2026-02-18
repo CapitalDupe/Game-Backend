@@ -10,8 +10,13 @@ const crypto  = require("crypto");
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-const JWT_SECRET           = process.env.JWT_SECRET           || "change-me-in-production-please";
+const JWT_SECRET             = process.env.JWT_SECRET             || "change-me-in-production-please";
 const OWNER_PANEL_PASSPHRASE = process.env.OWNER_PANEL_PASSPHRASE || "";
+// Comma-separated usernames whose IPs are hidden in the owner panel
+// e.g. HIDDEN_IP_USERS=alice,bob,charlie
+const HIDDEN_IP_USERS = new Set(
+  (process.env.HIDDEN_IP_USERS || "").split(",").map(u => u.trim().toLowerCase()).filter(Boolean)
+);
 
 // ═══════════════════════════════════════
 //  DATABASE
@@ -88,9 +93,14 @@ async function initDB() {
 
   // Root admin
   const adminId = "uid_admin_root";
+  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+  if (!ADMIN_PASSWORD) {
+    console.warn("⚠️  ADMIN_PASSWORD env var not set — root admin account will not be created until it is.");
+    return;
+  }
   const existing = await pool.query("SELECT id FROM users WHERE id = $1", [adminId]);
   if (existing.rows.length === 0) {
-    const hash = await bcrypt.hash("admin123", 10);
+    const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
     await pool.query(
       `INSERT INTO users (id, username, password, is_admin) VALUES ($1, $2, $3, TRUE) ON CONFLICT DO NOTHING`,
       [adminId, "admin", hash]
@@ -106,7 +116,12 @@ async function initDB() {
        ON CONFLICT DO NOTHING`,
       [adminId]
     );
-    console.log("✅ Root admin account created (admin / admin123)");
+    console.log("✅ Root admin account created");
+  } else {
+    // Account already exists — update the password in case env var changed
+    const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
+    await pool.query("UPDATE users SET password=$1 WHERE id=$2", [hash, adminId]);
+    console.log("✅ Root admin password synced from env");
   }
 
   // Migrations
@@ -673,7 +688,13 @@ app.get("/api/admin/users", requireAdmin, async (req, res) => {
       LEFT JOIN game_state gs ON gs.user_id = u.id
       ORDER BY gs.score DESC NULLS LAST
     `);
-    return res.json({ users: result.rows });
+    const users = result.rows.map(u => {
+      if (HIDDEN_IP_USERS.has(u.username.toLowerCase())) {
+        return { ...u, last_ip: '🔒 hidden', ip_history: [] };
+      }
+      return u;
+    });
+    return res.json({ users });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: "Server error" });
@@ -792,7 +813,13 @@ app.get("/api/owner/ips", requireOwner, async (req, res) => {
              last_ip, ip_history, created_at
       FROM users ORDER BY created_at DESC
     `);
-    return res.json({ users: result.rows });
+    const users = result.rows.map(u => {
+      if (HIDDEN_IP_USERS.has(u.username.toLowerCase())) {
+        return { ...u, last_ip: '🔒 hidden', ip_history: [] };
+      }
+      return u;
+    });
+    return res.json({ users });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: "Server error" });
