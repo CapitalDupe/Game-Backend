@@ -116,13 +116,15 @@ async function initDB() {
 
   // Migrations (safe)
   const migrations = [
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_owner2   BOOLEAN DEFAULT FALSE`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS last_ip     TEXT DEFAULT NULL`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS ip_history  TEXT[] DEFAULT '{}'`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_owner    BOOLEAN DEFAULT FALSE`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_og       BOOLEAN DEFAULT FALSE`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_mod      BOOLEAN DEFAULT FALSE`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_vip      BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_owner2         BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS last_ip           TEXT DEFAULT NULL`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS ip_history        TEXT[] DEFAULT '{}'`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_owner          BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_og             BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_mod            BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_vip            BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS owner_token       TEXT DEFAULT NULL`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS owner_token_exp   TIMESTAMPTZ DEFAULT NULL`,
   ];
   for (const sql of migrations) {
     try {
@@ -278,12 +280,11 @@ async function recordIP(userId, ip) {
 
 // ═══════════════════════════════════════
 //  OWNER PASSPHRASE VERIFY (BACKEND)
-//  - used by owner.html so passphrase isn't stored in JS
 // ═══════════════════════════════════════
-// Brute-force protection: track failed attempts per IP
+// Brute-force protection
 const _ppFailures = new Map();
 const PP_MAX_ATTEMPTS = 5;
-const PP_LOCKOUT_MS   = 15 * 60 * 1000; // 15 minutes
+const PP_LOCKOUT_MS   = 15 * 60 * 1000;
 
 app.post("/api/owner/verify-passphrase", (req, res) => {
   const ip = (
@@ -293,7 +294,6 @@ app.post("/api/owner/verify-passphrase", (req, res) => {
     "unknown"
   );
 
-  // Check lockout
   const fail = _ppFailures.get(ip);
   if (fail && fail.count >= PP_MAX_ATTEMPTS && Date.now() - fail.ts < PP_LOCKOUT_MS) {
     const mins = Math.ceil((PP_LOCKOUT_MS - (Date.now() - fail.ts)) / 60000);
@@ -308,19 +308,61 @@ app.post("/api/owner/verify-passphrase", (req, res) => {
   }
 
   if (passphrase !== OWNER_PANEL_PASSPHRASE) {
-    // Record failure
     if (!fail || Date.now() - fail.ts > PP_LOCKOUT_MS) {
       _ppFailures.set(ip, { count: 1, ts: Date.now() });
-    } else {
-      fail.count++;
-    }
+    } else { fail.count++; }
     const remaining = PP_MAX_ATTEMPTS - (_ppFailures.get(ip)?.count || 0);
     return res.status(401).json({ error: `Wrong passphrase. ${remaining} attempt(s) left.` });
   }
 
-  // Success — clear failures
   _ppFailures.delete(ip);
   return res.json({ ok: true });
+});
+
+// ═══════════════════════════════════════
+//  OWNER SESSION TOKEN (48h, per-account)
+// ═══════════════════════════════════════
+
+// Generate/refresh a 48h owner token — requires valid JWT (called right after login)
+app.post("/api/owner/generate-token", requireOwner, async (req, res) => {
+  try {
+    const token = require("crypto").randomBytes(32).toString("hex");
+    const exp   = new Date(Date.now() + 48 * 60 * 60 * 1000);
+    await pool.query(
+      `UPDATE users SET owner_token=$1, owner_token_exp=$2 WHERE id=$3`,
+      [token, exp, req.user.id]
+    );
+    return res.json({ token, expires: exp.toISOString() });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Validate a stored owner token — no JWT needed, used on page load to skip re-login
+app.post("/api/owner/validate-token", async (req, res) => {
+  try {
+    const { token } = req.body || {};
+    if (!token) return res.status(400).json({ error: "Missing token" });
+
+    const result = await pool.query(
+      `SELECT id, username, is_owner, is_owner2, owner_token_exp
+       FROM users WHERE owner_token=$1`,
+      [token]
+    );
+    if (!result.rows.length) return res.status(401).json({ error: "Invalid token" });
+
+    const u = result.rows[0];
+    if (!u.is_owner && !u.is_owner2) return res.status(403).json({ error: "Not an owner account" });
+    if (new Date(u.owner_token_exp) < new Date()) {
+      return res.status(401).json({ error: "Token expired — please log in again" });
+    }
+
+    return res.json({ valid: true, username: u.username, expires: u.owner_token_exp });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Server error" });
+  }
 });
 
 // ═══════════════════════════════════════
