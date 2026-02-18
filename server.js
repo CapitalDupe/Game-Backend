@@ -182,36 +182,65 @@ function requireAuth(req, res, next) {
   }
 }
 
-// Admins AND owners can use admin routes
-function requireAdmin(req, res, next) {
+// Re-checks DB on every request — JWT only proves identity, DB decides rank
+async function requireAdmin(req, res, next) {
   const ip = getClientIP(req);
-  if (isAdminLocked(ip)) {
-    return res.status(429).json({ error: "Too many failed attempts. Try again later." });
-  }
-  requireAuth(req, res, () => {
-    if (!req.user.isAdmin && !req.user.isOwner && !req.user.isOwner2) {
+  if (isAdminLocked(ip)) return res.status(429).json({ error: "Too many failed attempts. Try again later." });
+
+  const auth = req.headers.authorization;
+  if (!auth?.startsWith("Bearer ")) return res.status(401).json({ error: "No token" });
+
+  let payload;
+  try { payload = jwt.verify(auth.slice(7), JWT_SECRET); }
+  catch { return res.status(401).json({ error: "Invalid token" }); }
+
+  try {
+    const result = await pool.query(
+      "SELECT is_admin, is_owner, is_owner2 FROM users WHERE id=$1", [payload.id]
+    );
+    if (!result.rows.length) return res.status(401).json({ error: "User not found" });
+    const u = result.rows[0];
+    if (!u.is_admin && !u.is_owner && !u.is_owner2) {
       trackAdminFail(ip);
-      audit(req, 'ADMIN_DENIED', req.path);
+      audit({ headers: req.headers, socket: req.socket, user: payload }, 'ADMIN_DENIED', req.path);
       return res.status(403).json({ error: "Admin only" });
     }
+    req.user = { ...payload, isAdmin: u.is_admin, isOwner: u.is_owner, isOwner2: u.is_owner2 };
     next();
-  });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Server error" });
+  }
 }
 
-// Owners only
-function requireOwner(req, res, next) {
+async function requireOwner(req, res, next) {
   const ip = getClientIP(req);
-  if (isAdminLocked(ip)) {
-    return res.status(429).json({ error: "Too many failed attempts. Try again later." });
-  }
-  requireAuth(req, res, () => {
-    if (!req.user.isOwner && !req.user.isOwner2) {
+  if (isAdminLocked(ip)) return res.status(429).json({ error: "Too many failed attempts. Try again later." });
+
+  const auth = req.headers.authorization;
+  if (!auth?.startsWith("Bearer ")) return res.status(401).json({ error: "No token" });
+
+  let payload;
+  try { payload = jwt.verify(auth.slice(7), JWT_SECRET); }
+  catch { return res.status(401).json({ error: "Invalid token" }); }
+
+  try {
+    const result = await pool.query(
+      "SELECT is_owner, is_owner2 FROM users WHERE id=$1", [payload.id]
+    );
+    if (!result.rows.length) return res.status(401).json({ error: "User not found" });
+    const u = result.rows[0];
+    if (!u.is_owner && !u.is_owner2) {
       trackAdminFail(ip);
-      audit(req, 'OWNER_DENIED', req.path);
+      audit({ headers: req.headers, socket: req.socket, user: payload }, 'OWNER_DENIED', req.path);
       return res.status(403).json({ error: "Owner only" });
     }
+    req.user = { ...payload, isOwner: u.is_owner, isOwner2: u.is_owner2 };
     next();
-  });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Server error" });
+  }
 }
 
 // Owner-only audit log endpoint
