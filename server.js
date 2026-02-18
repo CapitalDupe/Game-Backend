@@ -706,7 +706,11 @@ app.get("/api/admin/user/:id", requireAdmin, async (req, res) => {
     const u  = await pool.query("SELECT * FROM users WHERE id = $1", [req.params.id]);
     const gs = await pool.query("SELECT * FROM game_state WHERE user_id = $1", [req.params.id]);
     if (!u.rows.length) return res.status(404).json({ error: "User not found" });
-    return res.json({ user: u.rows[0], state: rowToState(gs.rows[0]) });
+    let user = u.rows[0];
+    if (HIDDEN_IP_USERS.has(user.username.toLowerCase())) {
+      user = { ...user, last_ip: '🔒 hidden', ip_history: [] };
+    }
+    return res.json({ user, state: rowToState(gs.rows[0]) });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: "Server error" });
