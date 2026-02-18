@@ -1,18 +1,16 @@
 // server.js
-const path = require("path");
 const express = require("express");
-const cors = require("cors");
-const helmet = require("helmet");
+const cors    = require("cors");
+const helmet  = require("helmet");
 const { Pool } = require("pg");
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
+const bcrypt  = require("bcryptjs");
+const jwt     = require("jsonwebtoken");
+const crypto  = require("crypto");
 
-const app = express();
+const app  = express();
 const PORT = process.env.PORT || 3000;
 
-const JWT_SECRET = process.env.JWT_SECRET || "change-me-in-production-please";
-
-// IMPORTANT: set this in Render Environment tab (do NOT hardcode in code)
+const JWT_SECRET           = process.env.JWT_SECRET           || "change-me-in-production-please";
 const OWNER_PANEL_PASSPHRASE = process.env.OWNER_PANEL_PASSPHRASE || "";
 
 // ═══════════════════════════════════════
@@ -88,17 +86,15 @@ async function initDB() {
     );
   `);
 
-  // Ensure root admin account exists
+  // Root admin
   const adminId = "uid_admin_root";
   const existing = await pool.query("SELECT id FROM users WHERE id = $1", [adminId]);
   if (existing.rows.length === 0) {
     const hash = await bcrypt.hash("admin123", 10);
     await pool.query(
-      `INSERT INTO users (id, username, password, is_admin) VALUES ($1, $2, $3, TRUE)
-       ON CONFLICT DO NOTHING`,
+      `INSERT INTO users (id, username, password, is_admin) VALUES ($1, $2, $3, TRUE) ON CONFLICT DO NOTHING`,
       [adminId, "admin", hash]
     );
-
     await pool.query(
       `INSERT INTO game_state (user_id, score, luck_level, mult_level, cd_level, auto_level,
         vault_level, xp_level, crit_level, echo_level, soul_level, voidupg_level, asc_level,
@@ -110,29 +106,23 @@ async function initDB() {
        ON CONFLICT DO NOTHING`,
       [adminId]
     );
-
     console.log("✅ Root admin account created (admin / admin123)");
   }
 
-  // Migrations (safe)
+  // Migrations
   const migrations = [
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_owner2         BOOLEAN DEFAULT FALSE`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS last_ip           TEXT DEFAULT NULL`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS ip_history        TEXT[] DEFAULT '{}'`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_owner          BOOLEAN DEFAULT FALSE`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_og             BOOLEAN DEFAULT FALSE`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_mod            BOOLEAN DEFAULT FALSE`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_vip            BOOLEAN DEFAULT FALSE`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS owner_token       TEXT DEFAULT NULL`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS owner_token_exp   TIMESTAMPTZ DEFAULT NULL`,
-  ];
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_owner2       BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS last_ip         TEXT DEFAULT NULL`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS ip_history      TEXT[] DEFAULT '{}'`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_owner        BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_og           BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_mod          BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_vip          BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS owner_token     TEXT DEFAULT NULL`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS owner_token_exp TIMESTAMPTZ DEFAULT NULL`,
   ];
   for (const sql of migrations) {
-    try {
-      await pool.query(sql);
-    } catch (e) {
-      console.warn("Migration skipped:", e.message);
-    }
+    try { await pool.query(sql); } catch (e) { console.warn("Migration skipped:", e.message); }
   }
 
   console.log("✅ Database initialized");
@@ -142,23 +132,11 @@ async function initDB() {
 //  MIDDLEWARE
 // ═══════════════════════════════════════
 app.use(helmet({ contentSecurityPolicy: false }));
-
-app.use(
-  cors({
-    origin: process.env.FRONTEND_ORIGIN || "*",
-    credentials: true,
-  })
-);
-
+app.use(cors({ origin: process.env.FRONTEND_ORIGIN || "*", credentials: true }));
 app.use(express.json());
 
-// Serve /public (so /owner/index.html + assets work)
-app.use(express.static(path.join(__dirname, "public")));
-
-// Serve Owner Panel at /owner
-app.get("/owner", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "owner", "index.html"));
-});
+// Pure API — no static files served here.
+// All frontend files live in the frontend repo.
 
 // ═══════════════════════════════════════
 //  AUTH MIDDLEWARE
@@ -166,7 +144,6 @@ app.get("/owner", (req, res) => {
 function requireAuth(req, res, next) {
   const auth = req.headers.authorization;
   if (!auth?.startsWith("Bearer ")) return res.status(401).json({ error: "No token" });
-
   try {
     req.user = jwt.verify(auth.slice(7), JWT_SECRET);
     next();
@@ -175,6 +152,7 @@ function requireAuth(req, res, next) {
   }
 }
 
+// Admins AND owners can use admin routes
 function requireAdmin(req, res, next) {
   requireAuth(req, res, () => {
     if (!req.user.isAdmin && !req.user.isOwner && !req.user.isOwner2) {
@@ -184,6 +162,7 @@ function requireAdmin(req, res, next) {
   });
 }
 
+// Owners only
 function requireOwner(req, res, next) {
   requireAuth(req, res, () => {
     if (!req.user.isOwner && !req.user.isOwner2) {
@@ -199,14 +178,14 @@ function requireOwner(req, res, next) {
 function makeToken(userRow) {
   return jwt.sign(
     {
-      id: userRow.id,
+      id:       userRow.id,
       username: userRow.username,
-      isAdmin: userRow.is_admin,
-      isOwner: userRow.is_owner || false,
+      isAdmin:  userRow.is_admin,
+      isOwner:  userRow.is_owner  || false,
       isOwner2: userRow.is_owner2 || false,
-      isOG: userRow.is_og || false,
-      isMod: userRow.is_mod || false,
-      isVIP: userRow.is_vip || false,
+      isOG:     userRow.is_og     || false,
+      isMod:    userRow.is_mod    || false,
+      isVIP:    userRow.is_vip    || false,
     },
     JWT_SECRET,
     { expiresIn: "7d" }
@@ -216,41 +195,40 @@ function makeToken(userRow) {
 function rowToState(row) {
   if (!row) return null;
   return {
-    score: parseFloat(row.score) || 0,
-    luckLevel: row.luck_level || 1,
-    luckXP: parseFloat(row.luck_xp) || 0,
-    multLevel: row.mult_level || 0,
-    cdLevel: row.cd_level || 0,
-    autoLevel: row.auto_level || 0,
-    vaultLevel: row.vault_level || 0,
-    xpLevel: row.xp_level || 0,
-    critLevel: row.crit_level || 0,
-    echoLevel: row.echo_level || 0,
-    soulLevel: row.soul_level || 0,
-    voidupgLevel: row.voidupg_level || 0,
-    ascLevel: row.asc_level || 0,
-    timeLevel: row.time_level || 0,
-    forgeLevel: row.forge_level || 0,
-    prestigeLevel: row.prestige_level || 0,
-    totalRolls: row.total_rolls || 0,
+    score:          parseFloat(row.score) || 0,
+    luckLevel:      row.luck_level || 1,
+    luckXP:         parseFloat(row.luck_xp) || 0,
+    multLevel:      row.mult_level || 0,
+    cdLevel:        row.cd_level || 0,
+    autoLevel:      row.auto_level || 0,
+    vaultLevel:     row.vault_level || 0,
+    xpLevel:        row.xp_level || 0,
+    critLevel:      row.crit_level || 0,
+    echoLevel:      row.echo_level || 0,
+    soulLevel:      row.soul_level || 0,
+    voidupgLevel:   row.voidupg_level || 0,
+    ascLevel:       row.asc_level || 0,
+    timeLevel:      row.time_level || 0,
+    forgeLevel:     row.forge_level || 0,
+    prestigeLevel:  row.prestige_level || 0,
+    totalRolls:     row.total_rolls || 0,
     legendaryCount: row.legendary_count || 0,
-    mythicCount: row.mythic_count || 0,
-    divineCount: row.divine_count || 0,
+    mythicCount:    row.mythic_count || 0,
+    divineCount:    row.divine_count || 0,
     celestialCount: row.celestial_count || 0,
-    etherealCount: row.ethereal_count || 0,
-    voidCount: row.void_count || 0,
-    primordialCount: row.primordial_count || 0,
-    omegaCount: row.omega_count || 0,
-    critCount: row.crit_count || 0,
-    echoCount: row.echo_count || 0,
-    achievements: row.achievements || [],
+    etherealCount:  row.ethereal_count || 0,
+    voidCount:      row.void_count || 0,
+    primordialCount:row.primordial_count || 0,
+    omegaCount:     row.omega_count || 0,
+    critCount:      row.crit_count || 0,
+    echoCount:      row.echo_count || 0,
+    achievements:   row.achievements || [],
   };
 }
 
-// IP helpers
 function getClientIP(req) {
   return (
-    req.headers["cf-connecting-ip"] || // Cloudflare
+    req.headers["cf-connecting-ip"] ||
     req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
     req.headers["x-real-ip"] ||
     req.connection?.remoteAddress ||
@@ -263,8 +241,7 @@ async function recordIP(userId, ip) {
   if (!ip || ip === "unknown") return;
   try {
     await pool.query(
-      `
-      UPDATE users SET
+      `UPDATE users SET
         last_ip = $2,
         ip_history = (
           SELECT ARRAY(
@@ -272,42 +249,40 @@ async function recordIP(userId, ip) {
             LIMIT 20
           )
         )
-      WHERE id = $1
-    `,
+       WHERE id = $1`,
       [userId, ip]
     );
-  } catch (e) {
-    console.warn("IP record failed:", e.message);
-  }
+  } catch (e) { console.warn("IP record failed:", e.message); }
 }
 
 // ═══════════════════════════════════════
 //  OWNER PASSPHRASE VERIFY
+//  No auth required — checked before login
 // ═══════════════════════════════════════
 const _ppFailures = new Map();
 const PP_MAX_ATTEMPTS = 5;
 const PP_LOCKOUT_MS   = 15 * 60 * 1000;
 
 app.post("/api/owner/verify-passphrase", (req, res) => {
-  const ip = (
-    req.headers["cf-connecting-ip"] ||
-    req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
-    req.socket?.remoteAddress || "unknown"
-  );
+  const ip = getClientIP(req);
   const fail = _ppFailures.get(ip);
+
   if (fail && fail.count >= PP_MAX_ATTEMPTS && Date.now() - fail.ts < PP_LOCKOUT_MS) {
     const mins = Math.ceil((PP_LOCKOUT_MS - (Date.now() - fail.ts)) / 60000);
     return res.status(429).json({ error: `Too many attempts. Try again in ${mins} min.` });
   }
+
   const { passphrase } = req.body || {};
   if (!passphrase) return res.status(400).json({ error: "Missing passphrase" });
   if (!OWNER_PANEL_PASSPHRASE) return res.status(500).json({ error: "OWNER_PANEL_PASSPHRASE not set on server" });
+
   if (passphrase !== OWNER_PANEL_PASSPHRASE) {
     if (!fail || Date.now() - fail.ts > PP_LOCKOUT_MS) _ppFailures.set(ip, { count: 1, ts: Date.now() });
     else fail.count++;
     const remaining = PP_MAX_ATTEMPTS - (_ppFailures.get(ip)?.count || 0);
     return res.status(401).json({ error: `Wrong passphrase. ${remaining} attempt(s) left.` });
   }
+
   _ppFailures.delete(ip);
   return res.json({ ok: true });
 });
@@ -316,20 +291,23 @@ app.post("/api/owner/verify-passphrase", (req, res) => {
 //  OWNER SESSION TOKEN (48h per-account)
 // ═══════════════════════════════════════
 
-// After normal login: generate a 48h owner token, store in DB
+// Generate/refresh 48h token — called right after successful login
 app.post("/api/owner/generate-token", requireOwner, async (req, res) => {
   try {
-    const token = require("crypto").randomBytes(32).toString("hex");
+    const token = crypto.randomBytes(32).toString("hex");
     const exp   = new Date(Date.now() + 48 * 60 * 60 * 1000);
     await pool.query(
       `UPDATE users SET owner_token=$1, owner_token_exp=$2 WHERE id=$3`,
       [token, exp, req.user.id]
     );
     return res.json({ token, expires: exp.toISOString() });
-  } catch (err) { console.error(err); return res.status(500).json({ error: "Server error" }); }
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Server error" });
+  }
 });
 
-// Auto-login: exchange owner token → full JWT (no password needed)
+// Exchange stored owner token → fresh JWT (auto-login, no password needed)
 app.post("/api/owner/token-login", async (req, res) => {
   try {
     const { token } = req.body || {};
@@ -342,23 +320,23 @@ app.post("/api/owner/token-login", async (req, res) => {
 
     const user = result.rows[0];
     if (!user.is_owner && !user.is_owner2) return res.status(403).json({ error: "Not an owner account" });
-    if (new Date(user.owner_token_exp) < new Date()) {
-      return res.status(401).json({ error: "Token expired" });
-    }
+    if (new Date(user.owner_token_exp) < new Date()) return res.status(401).json({ error: "Token expired" });
 
-    // Issue a fresh JWT
     return res.json({
-      token: makeToken(user),
+      token:   makeToken(user),
       user: {
-        id: user.id,
+        id:       user.id,
         username: user.username,
-        isAdmin: user.is_admin,
-        isOwner: user.is_owner || false,
+        isAdmin:  user.is_admin,
+        isOwner:  user.is_owner  || false,
         isOwner2: user.is_owner2 || false,
       },
       expires: user.owner_token_exp,
     });
-  } catch (err) { console.error(err); return res.status(500).json({ error: "Server error" }); }
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Server error" });
+  }
 });
 
 // ═══════════════════════════════════════
@@ -368,35 +346,23 @@ app.post("/api/auth/signup", async (req, res) => {
   try {
     const { username, password } = req.body || {};
     if (!username || username.length < 2) return res.status(400).json({ error: "Username must be 2+ chars" });
-    if (!password || password.length < 6) return res.status(400).json({ error: "Password must be 6+ chars" });
+    if (!password || password.length < 6)  return res.status(400).json({ error: "Password must be 6+ chars" });
     if (username.toLowerCase() === "admin") return res.status(400).json({ error: "Username reserved" });
 
     const exists = await pool.query("SELECT id FROM users WHERE LOWER(username) = LOWER($1)", [username]);
     if (exists.rows.length) return res.status(409).json({ error: "Username already taken" });
 
-    const id = "u_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+    const id   = "u_" + Date.now() + "_" + Math.random().toString(36).slice(2);
     const hash = await bcrypt.hash(password, 10);
 
     await pool.query("INSERT INTO users (id, username, password) VALUES ($1, $2, $3)", [id, username, hash]);
     await pool.query("INSERT INTO game_state (user_id) VALUES ($1)", [id]);
-
     await recordIP(id, getClientIP(req));
 
-    // Create a user row-like object to mint JWT
-    const u = {
-      id,
-      username,
-      is_admin: false,
-      is_owner: false,
-      is_owner2: false,
-      is_og: false,
-      is_mod: false,
-      is_vip: false,
-    };
-
+    const u = { id, username, is_admin: false, is_owner: false, is_owner2: false, is_og: false, is_mod: false, is_vip: false };
     return res.json({
       token: makeToken(u),
-      user: { id, username, isAdmin: false, isOwner: false, isOwner2: false, isOG: false, isMod: false, isVIP: false },
+      user:  { id, username, isAdmin: false, isOwner: false, isOwner2: false, isOG: false, isMod: false, isVIP: false },
     });
   } catch (err) {
     console.error(err);
@@ -410,7 +376,7 @@ app.post("/api/auth/login", async (req, res) => {
     const result = await pool.query("SELECT * FROM users WHERE LOWER(username) = LOWER($1)", [username]);
     if (!result.rows.length) return res.status(401).json({ error: "Invalid credentials" });
 
-    const user = result.rows[0];
+    const user  = result.rows[0];
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) return res.status(401).json({ error: "Invalid credentials" });
 
@@ -419,14 +385,14 @@ app.post("/api/auth/login", async (req, res) => {
     return res.json({
       token: makeToken(user),
       user: {
-        id: user.id,
+        id:       user.id,
         username: user.username,
-        isAdmin: user.is_admin,
-        isOwner: user.is_owner || false,
+        isAdmin:  user.is_admin,
+        isOwner:  user.is_owner  || false,
         isOwner2: user.is_owner2 || false,
-        isOG: user.is_og || false,
-        isMod: user.is_mod || false,
-        isVIP: user.is_vip || false,
+        isOG:     user.is_og     || false,
+        isMod:    user.is_mod    || false,
+        isVIP:    user.is_vip    || false,
       },
     });
   } catch (err) {
@@ -451,10 +417,8 @@ app.get("/api/game/load", requireAuth, async (req, res) => {
 app.post("/api/game/save", requireAuth, async (req, res) => {
   try {
     const s = req.body || {};
-
     await pool.query(
-      `
-      INSERT INTO game_state (
+      `INSERT INTO game_state (
         user_id, score, luck_level, luck_xp, mult_level, cd_level, auto_level,
         vault_level, xp_level, crit_level, echo_level, soul_level, voidupg_level,
         asc_level, time_level, forge_level, prestige_level, total_rolls,
@@ -472,41 +436,21 @@ app.post("/api/game/save", requireAuth, async (req, res) => {
         forge_level=$16, prestige_level=$17, total_rolls=$18, legendary_count=$19,
         mythic_count=$20, divine_count=$21, celestial_count=$22, ethereal_count=$23,
         void_count=$24, primordial_count=$25, omega_count=$26, crit_count=$27,
-        echo_count=$28, achievements=$29, updated_at=NOW()
-    `,
+        echo_count=$28, achievements=$29, updated_at=NOW()`,
       [
         req.user.id,
-        s.score || 0,
-        s.luckLevel || 1,
-        s.luckXP || 0,
-        s.multLevel || 0,
-        s.cdLevel || 0,
-        s.autoLevel || 0,
-        s.vaultLevel || 0,
-        s.xpLevel || 0,
-        s.critLevel || 0,
-        s.echoLevel || 0,
-        s.soulLevel || 0,
-        s.voidupgLevel || 0,
-        s.ascLevel || 0,
-        s.timeLevel || 0,
-        s.forgeLevel || 0,
-        s.prestigeLevel || 0,
-        s.totalRolls || 0,
-        s.legendaryCount || 0,
-        s.mythicCount || 0,
-        s.divineCount || 0,
-        s.celestialCount || 0,
-        s.etherealCount || 0,
-        s.voidCount || 0,
-        s.primordialCount || 0,
-        s.omegaCount || 0,
-        s.critCount || 0,
-        s.echoCount || 0,
-        s.achievements || [],
+        s.score          || 0, s.luckLevel      || 1, s.luckXP         || 0,
+        s.multLevel      || 0, s.cdLevel         || 0, s.autoLevel       || 0,
+        s.vaultLevel     || 0, s.xpLevel         || 0, s.critLevel       || 0,
+        s.echoLevel      || 0, s.soulLevel        || 0, s.voidupgLevel    || 0,
+        s.ascLevel       || 0, s.timeLevel        || 0, s.forgeLevel      || 0,
+        s.prestigeLevel  || 0, s.totalRolls       || 0, s.legendaryCount  || 0,
+        s.mythicCount    || 0, s.divineCount       || 0, s.celestialCount  || 0,
+        s.etherealCount  || 0, s.voidCount         || 0, s.primordialCount || 0,
+        s.omegaCount     || 0, s.critCount         || 0, s.echoCount       || 0,
+        s.achievements   || [],
       ]
     );
-
     return res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -519,55 +463,47 @@ app.post("/api/game/save", requireAuth, async (req, res) => {
 // ═══════════════════════════════════════
 app.get("/api/leaderboard", async (req, res) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
-    const sortBy = req.query.sort || "score";
-
-    const colMap = {
-      score: "gs.score",
-      prestige: "gs.prestige_level",
-      rolls: "gs.total_rolls",
-      luck: "gs.luck_level",
-    };
+    const limit   = Math.min(parseInt(req.query.limit) || 50, 100);
+    const sortBy  = req.query.sort || "score";
+    const colMap  = { score: "gs.score", prestige: "gs.prestige_level", rolls: "gs.total_rolls", luck: "gs.luck_level" };
     const orderCol = colMap[sortBy] || "gs.score";
 
     const result = await pool.query(
-      `
-      SELECT
+      `SELECT
         u.id, u.username, u.is_admin, u.is_owner, u.is_owner2, u.is_og, u.is_mod, u.is_vip,
         gs.score, gs.luck_level, gs.prestige_level,
         gs.total_rolls, gs.omega_count, gs.void_count,
         gs.legendary_count, gs.mythic_count, gs.divine_count,
         gs.achievements, gs.updated_at
-      FROM users u
-      JOIN game_state gs ON gs.user_id = u.id
-      ORDER BY ${orderCol} DESC
-      LIMIT $1
-    `,
+       FROM users u
+       JOIN game_state gs ON gs.user_id = u.id
+       ORDER BY ${orderCol} DESC
+       LIMIT $1`,
       [limit]
     );
 
     return res.json({
       leaderboard: result.rows.map((r, i) => ({
-        rank: i + 1,
-        id: r.id,
-        username: r.username,
-        isAdmin: r.is_admin,
-        isOwner: r.is_owner || false,
-        isOwner2: r.is_owner2 || false,
-        isOG: r.is_og || false,
-        isMod: r.is_mod || false,
-        isVIP: r.is_vip || false,
-        score: parseFloat(r.score),
-        luckLevel: r.luck_level,
+        rank:          i + 1,
+        id:            r.id,
+        username:      r.username,
+        isAdmin:       r.is_admin,
+        isOwner:       r.is_owner  || false,
+        isOwner2:      r.is_owner2 || false,
+        isOG:          r.is_og     || false,
+        isMod:         r.is_mod    || false,
+        isVIP:         r.is_vip    || false,
+        score:         parseFloat(r.score),
+        luckLevel:     r.luck_level,
         prestigeLevel: r.prestige_level,
-        totalRolls: r.total_rolls,
-        omegaCount: r.omega_count,
-        voidCount: r.void_count,
-        legendaryCount: r.legendary_count,
-        mythicCount: r.mythic_count,
-        divineCount: r.divine_count,
-        achievements: (r.achievements || []).length,
-        lastSeen: r.updated_at,
+        totalRolls:    r.total_rolls,
+        omegaCount:    r.omega_count,
+        voidCount:     r.void_count,
+        legendaryCount:r.legendary_count,
+        mythicCount:   r.mythic_count,
+        divineCount:   r.divine_count,
+        achievements:  (r.achievements || []).length,
+        lastSeen:      r.updated_at,
       })),
     });
   } catch (err) {
@@ -577,7 +513,7 @@ app.get("/api/leaderboard", async (req, res) => {
 });
 
 // ═══════════════════════════════════════
-//  ADMIN
+//  ADMIN ROUTES
 // ═══════════════════════════════════════
 app.get("/api/admin/users", requireAdmin, async (req, res) => {
   try {
@@ -589,7 +525,6 @@ app.get("/api/admin/users", requireAdmin, async (req, res) => {
       LEFT JOIN game_state gs ON gs.user_id = u.id
       ORDER BY gs.score DESC NULLS LAST
     `);
-
     return res.json({ users: result.rows });
   } catch (err) {
     console.error(err);
@@ -599,7 +534,7 @@ app.get("/api/admin/users", requireAdmin, async (req, res) => {
 
 app.get("/api/admin/user/:id", requireAdmin, async (req, res) => {
   try {
-    const u = await pool.query("SELECT * FROM users WHERE id = $1", [req.params.id]);
+    const u  = await pool.query("SELECT * FROM users WHERE id = $1", [req.params.id]);
     const gs = await pool.query("SELECT * FROM game_state WHERE user_id = $1", [req.params.id]);
     if (!u.rows.length) return res.status(404).json({ error: "User not found" });
     return res.json({ user: u.rows[0], state: rowToState(gs.rows[0]) });
@@ -614,80 +549,37 @@ app.patch("/api/admin/user/:id", requireAdmin, async (req, res) => {
     const { id } = req.params;
     const s = req.body || {};
 
-    // Rank updates
-    const rankUpdates = [];
-    const rankVals = [];
+    const rankUpdates = [], rankVals = [];
     let ri = 1;
-
-    if (s.isOwner !== undefined) {
-      rankUpdates.push(`is_owner=$${ri++}`);
-      rankVals.push(!!s.isOwner);
-    }
-    if (s.isOwner2 !== undefined) {
-      rankUpdates.push(`is_owner2=$${ri++}`);
-      rankVals.push(!!s.isOwner2);
-    }
-    if (s.isAdmin !== undefined && id !== "uid_admin_root") {
-      rankUpdates.push(`is_admin=$${ri++}`);
-      rankVals.push(!!s.isAdmin);
-    }
-    if (s.isOG !== undefined) {
-      rankUpdates.push(`is_og=$${ri++}`);
-      rankVals.push(!!s.isOG);
-    }
-    if (s.isMod !== undefined) {
-      rankUpdates.push(`is_mod=$${ri++}`);
-      rankVals.push(!!s.isMod);
-    }
-    if (s.isVIP !== undefined) {
-      rankUpdates.push(`is_vip=$${ri++}`);
-      rankVals.push(!!s.isVIP);
-    }
-
+    if (s.isOwner  !== undefined) { rankUpdates.push(`is_owner=$${ri++}`);  rankVals.push(!!s.isOwner); }
+    if (s.isOwner2 !== undefined) { rankUpdates.push(`is_owner2=$${ri++}`); rankVals.push(!!s.isOwner2); }
+    if (s.isAdmin  !== undefined && id !== "uid_admin_root") { rankUpdates.push(`is_admin=$${ri++}`); rankVals.push(!!s.isAdmin); }
+    if (s.isOG     !== undefined) { rankUpdates.push(`is_og=$${ri++}`);     rankVals.push(!!s.isOG); }
+    if (s.isMod    !== undefined) { rankUpdates.push(`is_mod=$${ri++}`);    rankVals.push(!!s.isMod); }
+    if (s.isVIP    !== undefined) { rankUpdates.push(`is_vip=$${ri++}`);    rankVals.push(!!s.isVIP); }
     if (rankUpdates.length > 0) {
       rankVals.push(id);
       await pool.query(`UPDATE users SET ${rankUpdates.join(", ")} WHERE id=$${ri}`, rankVals);
     }
 
-    // Password update
     if (s.password) {
       const hash = await bcrypt.hash(s.password, 10);
       await pool.query("UPDATE users SET password = $1 WHERE id = $2", [hash, id]);
     }
 
-    // Game state update (only fields sent)
     const map = {
-      score: "score",
-      luckLevel: "luck_level",
-      prestigeLevel: "prestige_level",
-      totalRolls: "total_rolls",
-      voidCount: "void_count",
-      omegaCount: "omega_count",
-      multLevel: "mult_level",
-      cdLevel: "cd_level",
-      autoLevel: "auto_level",
-      vaultLevel: "vault_level",
-      xpLevel: "xp_level",
-      critLevel: "crit_level",
-      voidupgLevel: "voidupg_level",
-      echoLevel: "echo_level",
-      soulLevel: "soul_level",
-      ascLevel: "asc_level",
-      timeLevel: "time_level",
-      forgeLevel: "forge_level",
+      score: "score", luckLevel: "luck_level", prestigeLevel: "prestige_level",
+      totalRolls: "total_rolls", voidCount: "void_count", omegaCount: "omega_count",
+      multLevel: "mult_level", cdLevel: "cd_level", autoLevel: "auto_level",
+      vaultLevel: "vault_level", xpLevel: "xp_level", critLevel: "crit_level",
+      voidupgLevel: "voidupg_level", echoLevel: "echo_level", soulLevel: "soul_level",
+      ascLevel: "asc_level", timeLevel: "time_level", forgeLevel: "forge_level",
     };
-
-    const fields = [];
-    const vals = [id];
+    const fields = [], vals = [id];
     let idx = 2;
-
     for (const [jsKey, dbCol] of Object.entries(map)) {
-      if (s[jsKey] !== undefined) {
-        fields.push(`${dbCol}=$${idx++}`);
-        vals.push(s[jsKey]);
-      }
+      if (s[jsKey] !== undefined) { fields.push(`${dbCol}=$${idx++}`); vals.push(s[jsKey]); }
     }
-
     if (fields.length > 0) {
       fields.push("updated_at=NOW()");
       await pool.query(`INSERT INTO game_state (user_id) VALUES ($1) ON CONFLICT DO NOTHING`, [id]);
@@ -715,8 +607,7 @@ app.delete("/api/admin/user/:id", requireAdmin, async (req, res) => {
 app.post("/api/admin/reset/:id", requireAdmin, async (req, res) => {
   try {
     await pool.query(
-      `
-      UPDATE game_state SET
+      `UPDATE game_state SET
         score=0, luck_level=1, luck_xp=0, mult_level=0, cd_level=0,
         auto_level=0, vault_level=0, xp_level=0, crit_level=0, echo_level=0,
         soul_level=0, voidupg_level=0, asc_level=0, time_level=0, forge_level=0,
@@ -724,8 +615,7 @@ app.post("/api/admin/reset/:id", requireAdmin, async (req, res) => {
         divine_count=0, celestial_count=0, ethereal_count=0, void_count=0,
         primordial_count=0, omega_count=0, crit_count=0, echo_count=0,
         achievements='{}', updated_at=NOW()
-      WHERE user_id=$1
-    `,
+       WHERE user_id=$1`,
       [req.params.id]
     );
     return res.json({ ok: true });
@@ -740,21 +630,18 @@ let globalSettings = { globalMult: 1, xpRate: 1, broadcastMsg: "" };
 app.get("/api/settings", (req, res) => res.json(globalSettings));
 app.post("/api/admin/settings", requireAdmin, (req, res) => {
   const { globalMult, xpRate, broadcastMsg } = req.body || {};
-  if (globalMult !== undefined) globalSettings.globalMult = parseFloat(globalMult) || 1;
-  if (xpRate !== undefined) globalSettings.xpRate = parseFloat(xpRate) || 1;
+  if (globalMult   !== undefined) globalSettings.globalMult  = parseFloat(globalMult) || 1;
+  if (xpRate       !== undefined) globalSettings.xpRate       = parseFloat(xpRate)    || 1;
   if (broadcastMsg !== undefined) globalSettings.broadcastMsg = broadcastMsg;
   return res.json({ ok: true, settings: globalSettings });
 });
 
-// Owner IP lookup (owner/owner2 only)
+// Owner IP lookup
 app.get("/api/owner/ips", requireOwner, async (req, res) => {
   try {
-    const caller = await pool.query("SELECT is_owner, is_owner2 FROM users WHERE id = $1", [req.user.id]);
-    if (!caller.rows[0]?.is_owner && !caller.rows[0]?.is_owner2) {
-      return res.status(403).json({ error: "Owner only" });
-    }
     const result = await pool.query(`
-      SELECT id, username, is_admin, is_owner, is_owner2, last_ip, ip_history, created_at
+      SELECT id, username, is_admin, is_owner, is_owner2, is_og, is_mod, is_vip,
+             last_ip, ip_history, created_at
       FROM users ORDER BY created_at DESC
     `);
     return res.json({ users: result.rows });
@@ -765,19 +652,14 @@ app.get("/api/owner/ips", requireOwner, async (req, res) => {
 });
 
 // ═══════════════════════════════════════
-//  HEALTH / ROOT
+//  HEALTH
 // ═══════════════════════════════════════
 app.get("/health", (req, res) => res.json({ status: "ok", time: new Date().toISOString() }));
-app.get("/", (req, res) => res.json({ name: "Capital RNG API", version: "2.0.0" }));
+app.get("/",       (req, res) => res.json({ name: "Capital RNG API", version: "2.0.0" }));
 
 // ═══════════════════════════════════════
 //  START
 // ═══════════════════════════════════════
 initDB()
-  .then(() => {
-    app.listen(PORT, () => console.log(`🚀 Capital RNG API running on port ${PORT}`));
-  })
-  .catch((err) => {
-    console.error("❌ DB init failed:", err);
-    process.exit(1);
-  });
+  .then(() => app.listen(PORT, () => console.log(`🚀 Capital RNG API running on port ${PORT}`)))
+  .catch((err) => { console.error("❌ DB init failed:", err); process.exit(1); });
