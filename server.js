@@ -147,43 +147,27 @@ async function initDB() {
 //  MIDDLEWARE
 // ═══════════════════════════════════════
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(helmet({ contentSecurityPolicy: false }));
-
-const FRONTEND_ORIGIN = (process.env.FRONTEND_ORIGIN || "").replace(/\/$/, ""); // strip trailing slash
-
-// allow any Cloudflare Pages URL like https://xxxx.game-3v1.pages.dev
-const PAGES_DEV_REGEX = /^https:\/\/[a-z0-9-]+\.game-3v1\.pages\.dev$/i;
-
-// add any other fixed origins you want
-const ALLOWED_ORIGINS = new Set(
-  [
-    FRONTEND_ORIGIN,
-    "https://capitaldupe.github.io",
-    "https://capitaldupe.com",
-  ].filter(Boolean)
-);
+const ALLOWED_ORIGINS = new Set([
+  "https://game-3v1.pages.dev",
+  "https://rng.capitaldupe.com",
+  "https://main.game-3v1.pages.dev",
+  "https://b1f15f7.game-3v1.pages.dev",
+  "https://4a23193c.game-3v1.pages.dev",
+  ...(process.env.EXTRA_ORIGINS || "").split(",").map(o => o.trim()).filter(Boolean),
+]);
 
 app.use(cors({
-  origin: (origin, cb) => {
-    // allow non-browser tools (curl/postman) where Origin is missing
-    if (!origin) return cb(null, true);
-
-    const clean = origin.replace(/\/$/, "");
-    if (ALLOWED_ORIGINS.has(clean) || PAGES_DEV_REGEX.test(clean)) {
-      return cb(null, true);
-    }
-    return cb(new Error("CORS blocked: " + origin));
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+    // Allow exact matches
+    if (ALLOWED_ORIGINS.has(origin)) return callback(null, true);
+    // Allow Cloudflare Pages preview URLs (*.game-3v1.pages.dev)
+    if (/^https:\/\/[a-z0-9-]+\.game-3v1\.pages\.dev$/.test(origin)) return callback(null, true);
+    callback(new Error(`CORS blocked: ${origin}`));
   },
-  methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-  credentials: false, // set true ONLY if you use cookies
+  credentials: true,
 }));
-
-// handle preflight
-app.options("*", cors());
-
-app.use(express.json());
-
 app.use(express.json());
 
 // Pure API — no static files served here.
