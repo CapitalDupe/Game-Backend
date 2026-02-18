@@ -485,6 +485,36 @@ app.get("/api/game/load", requireAuth, async (req, res) => {
 app.post("/api/game/save", requireAuth, async (req, res) => {
   try {
     const s = req.body || {};
+
+    // ── Server-side validation: clamp all values to legitimate ranges ──
+    // A normal player cannot exceed these without cheating
+    const clamp  = (v, min, max) => Math.min(max, Math.max(min, parseFloat(v) || 0));
+    const clampI = (v, min, max) => Math.min(max, Math.max(min, parseInt(v)   || 0));
+
+    // First load their current state so we can validate progression
+    const cur = await pool.query("SELECT * FROM game_state WHERE user_id = $1", [req.user.id]);
+    const curState = cur.rows[0] || {};
+
+    // Scores can grow very large legitimately, but cap at a sane ceiling
+    // and never allow a single save to jump by more than a reasonable amount
+    const MAX_SCORE = 1e18; // 1 quintillion — effectively unlimited for real play
+    const curScore  = parseFloat(curState.score) || 0;
+    const newScore  = clamp(s.score, 0, MAX_SCORE);
+
+    // Luck level: 1–100, can only go up (never allow reducing except via admin)
+    const curLuck  = parseInt(curState.luck_level) || 1;
+    const newLuck  = clampI(s.luckLevel, curLuck, 100); // can't decrease own luck
+
+    // Prestige: 0–999, can only increase
+    const curPrestige = parseInt(curState.prestige_level) || 0;
+    const newPrestige = clampI(s.prestigeLevel, curPrestige, 999);
+
+    // Upgrade levels: 0–200 each, can only increase
+    const upg = (key, curKey, max = 200) => clampI(s[key], parseInt(curState[curKey]) || 0, max);
+
+    // Roll counts: can only increase
+    const rolls = (key, curKey) => Math.max(parseInt(curState[curKey]) || 0, clampI(s[key], 0, 1e9));
+
     await pool.query(
       `INSERT INTO game_state (
         user_id, score, luck_level, luck_xp, mult_level, cd_level, auto_level,
@@ -507,16 +537,34 @@ app.post("/api/game/save", requireAuth, async (req, res) => {
         echo_count=$28, achievements=$29, updated_at=NOW()`,
       [
         req.user.id,
-        s.score          || 0, s.luckLevel      || 1, s.luckXP         || 0,
-        s.multLevel      || 0, s.cdLevel         || 0, s.autoLevel       || 0,
-        s.vaultLevel     || 0, s.xpLevel         || 0, s.critLevel       || 0,
-        s.echoLevel      || 0, s.soulLevel        || 0, s.voidupgLevel    || 0,
-        s.ascLevel       || 0, s.timeLevel        || 0, s.forgeLevel      || 0,
-        s.prestigeLevel  || 0, s.totalRolls       || 0, s.legendaryCount  || 0,
-        s.mythicCount    || 0, s.divineCount       || 0, s.celestialCount  || 0,
-        s.etherealCount  || 0, s.voidCount         || 0, s.primordialCount || 0,
-        s.omegaCount     || 0, s.critCount         || 0, s.echoCount       || 0,
-        s.achievements   || [],
+        newScore,
+        newLuck,
+        clamp(s.luckXP,          0, 1e9),
+        upg('multLevel',      'mult_level'),
+        upg('cdLevel',        'cd_level'),
+        upg('autoLevel',      'auto_level'),
+        upg('vaultLevel',     'vault_level'),
+        upg('xpLevel',        'xp_level'),
+        upg('critLevel',      'crit_level'),
+        upg('echoLevel',      'echo_level'),
+        upg('soulLevel',      'soul_level'),
+        upg('voidupgLevel',   'voidupg_level'),
+        upg('ascLevel',       'asc_level'),
+        upg('timeLevel',      'time_level'),
+        upg('forgeLevel',     'forge_level'),
+        newPrestige,
+        rolls('totalRolls',       'total_rolls'),
+        rolls('legendaryCount',   'legendary_count'),
+        rolls('mythicCount',      'mythic_count'),
+        rolls('divineCount',      'divine_count'),
+        rolls('celestialCount',   'celestial_count'),
+        rolls('etherealCount',    'ethereal_count'),
+        rolls('voidCount',        'void_count'),
+        rolls('primordialCount',  'primordial_count'),
+        rolls('omegaCount',       'omega_count'),
+        rolls('critCount',        'crit_count'),
+        rolls('echoCount',        'echo_count'),
+        Array.isArray(s.achievements) ? s.achievements : [],
       ]
     );
     return res.json({ ok: true });
