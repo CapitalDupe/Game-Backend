@@ -530,7 +530,7 @@ app.post("/api/game/save", requireAuth, async (req, res) => {
     const MAX_SCORE      = 1e18;
     const curScore       = parseFloat(curState.score) || 0;
     const submittedScore = clamp(s.score, 0, MAX_SCORE);
-    const maxAllowed     = Math.max(curScore * 1000 + 1_000_000, 1_000_000);
+    const maxAllowed     = Math.max(curScore * 1000 + 500_000, 500_000);
     const newScore       = Math.min(submittedScore, maxAllowed);
 
     // Luck level: 1–100, can only go up (never allow reducing except via admin)
