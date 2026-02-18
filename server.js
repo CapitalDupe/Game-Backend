@@ -147,7 +147,43 @@ async function initDB() {
 //  MIDDLEWARE
 // ═══════════════════════════════════════
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors({ origin: process.env.FRONTEND_ORIGIN || "*", credentials: true }));
+app.use(helmet({ contentSecurityPolicy: false }));
+
+const FRONTEND_ORIGIN = (process.env.FRONTEND_ORIGIN || "").replace(/\/$/, ""); // strip trailing slash
+
+// allow any Cloudflare Pages URL like https://xxxx.game-3v1.pages.dev
+const PAGES_DEV_REGEX = /^https:\/\/[a-z0-9-]+\.game-3v1\.pages\.dev$/i;
+
+// add any other fixed origins you want
+const ALLOWED_ORIGINS = new Set(
+  [
+    FRONTEND_ORIGIN,
+    "https://capitaldupe.github.io",
+    "https://capitaldupe.com",
+  ].filter(Boolean)
+);
+
+app.use(cors({
+  origin: (origin, cb) => {
+    // allow non-browser tools (curl/postman) where Origin is missing
+    if (!origin) return cb(null, true);
+
+    const clean = origin.replace(/\/$/, "");
+    if (ALLOWED_ORIGINS.has(clean) || PAGES_DEV_REGEX.test(clean)) {
+      return cb(null, true);
+    }
+    return cb(new Error("CORS blocked: " + origin));
+  },
+  methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: false, // set true ONLY if you use cookies
+}));
+
+// handle preflight
+app.options("*", cors());
+
+app.use(express.json());
+
 app.use(express.json());
 
 // Pure API — no static files served here.
