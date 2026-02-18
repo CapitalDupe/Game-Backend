@@ -1,0 +1,1438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>404 - Not Found</title>
+<style>
+  /* ── Reset ── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --gold:   #ffaa00;
+    --gold2:  #ffdd88;
+    --dark:   #0a0800;
+    --panel:  #110e04;
+    --border: rgba(255,170,0,0.2);
+    --red:    #ff4444;
+    --green:  #57f287;
+    --blue:   #5dade2;
+    --purple: #bf69ff;
+  }
+
+  body {
+    background: var(--dark);
+    color: #aaa;
+    font-family: 'Share Tech Mono', monospace;
+    min-height: 100vh;
+  }
+
+  /* ── Auth screen ── */
+  #auth-screen {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    background: radial-gradient(ellipse at center, #0d0900 0%, #060400 100%);
+  }
+
+  .auth-box {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    padding: 40px 36px;
+    width: 380px;
+    max-width: 95vw;
+    position: relative;
+  }
+  .auth-box::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--gold), transparent);
+  }
+
+  .auth-crown { font-size: 2.5rem; text-align: center; margin-bottom: 12px; }
+
+  .auth-title {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.85rem;
+    color: var(--gold);
+    letter-spacing: 4px;
+    text-align: center;
+    margin-bottom: 4px;
+  }
+
+  .auth-sub {
+    font-size: 0.62rem;
+    color: #554422;
+    text-align: center;
+    margin-bottom: 28px;
+    letter-spacing: 1px;
+  }
+
+  .auth-field { margin-bottom: 14px; }
+  .auth-label {
+    display: block;
+    font-size: 0.58rem;
+    color: #665533;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 5px;
+  }
+  .auth-input {
+    width: 100%;
+    background: rgba(0,0,0,0.5);
+    border: 1px solid var(--border);
+    color: var(--gold2);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.85rem;
+    padding: 10px 12px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .auth-input:focus { border-color: var(--gold); }
+  .auth-input::placeholder { color: #443322; }
+
+  .auth-btn {
+    width: 100%;
+    padding: 11px;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.65rem;
+    letter-spacing: 3px;
+    border: 1px solid var(--gold);
+    background: rgba(180,100,0,0.15);
+    color: var(--gold2);
+    cursor: pointer;
+    transition: all 0.15s;
+    margin-top: 8px;
+  }
+  .auth-btn:hover { background: rgba(180,100,0,0.35); }
+  .auth-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .auth-error {
+    font-size: 0.65rem;
+    color: var(--red);
+    text-align: center;
+    margin-top: 10px;
+    min-height: 18px;
+  }
+
+  .auth-hint {
+    font-size: 0.58rem;
+    color: #332211;
+    text-align: center;
+    margin-top: 18px;
+    line-height: 1.6;
+  }
+
+  /* ── Main panel ── */
+  #owner-panel {
+    display: none;
+    flex-direction: column;
+    min-height: 100vh;
+  }
+
+  /* Header */
+  .op-header {
+    background: linear-gradient(135deg, #0d0a00, #150f02);
+    border-bottom: 1px solid rgba(255,170,0,0.25);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .op-header-left { display: flex; align-items: center; gap: 12px; }
+  .op-logo {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.9rem;
+    color: var(--gold);
+    letter-spacing: 4px;
+    font-weight: 700;
+  }
+  .op-logo span { color: #cc7700; }
+  .op-user-badge {
+    font-size: 0.65rem;
+    color: #665533;
+    background: rgba(255,170,0,0.06);
+    border: 1px solid rgba(255,170,0,0.15);
+    padding: 3px 10px;
+  }
+  .op-stat-bar { display: flex; gap: 16px; font-size: 0.63rem; color: #886622; flex-wrap: wrap; }
+  .op-header-right { display: flex; gap: 8px; align-items: center; }
+  .op-logout-btn {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.52rem;
+    letter-spacing: 1.5px;
+    padding: 6px 14px;
+    border: 1px solid rgba(255,80,0,0.3);
+    background: transparent;
+    color: #884422;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .op-logout-btn:hover { border-color: var(--red); color: var(--red); }
+
+  /* Tab bar */
+  .op-tabs {
+    background: rgba(0,0,0,0.3);
+    border-bottom: 1px solid rgba(255,170,0,0.12);
+    padding: 0 24px;
+    display: flex;
+    gap: 2px;
+    flex-wrap: wrap;
+  }
+  .op-tab {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.52rem;
+    letter-spacing: 1.5px;
+    padding: 10px 14px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: #665533;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .op-tab:hover { color: #aa8844; border-bottom-color: rgba(255,170,0,0.3); }
+  .op-tab.active { color: var(--gold2); border-bottom-color: var(--gold); }
+  .op-tab.danger-tab { color: #773322; }
+  .op-tab.danger-tab:hover, .op-tab.danger-tab.active { color: #ff8866; border-bottom-color: #ff4400; }
+
+  /* Content area */
+  .op-content { padding: 24px; flex: 1; max-width: 1100px; width: 100%; margin: 0 auto; }
+  .op-section { display: none; animation: opFade 0.15s ease; }
+  .op-section.active { display: block; }
+  @keyframes opFade { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
+
+  /* Section elements */
+  .op-shead {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.6rem;
+    letter-spacing: 2px;
+    color: var(--gold);
+    text-transform: uppercase;
+    margin: 0 0 10px;
+  }
+  .op-divider { border: none; border-top: 1px solid rgba(255,170,0,0.1); margin: 20px 0; }
+  .op-desc { font-size: 0.67rem; color: #665533; margin-bottom: 10px; line-height: 1.6; }
+  .op-status { font-family: 'VT323', monospace; font-size: 1rem; color: var(--gold); margin-top: 6px; }
+
+  /* Cards grid for dashboard */
+  .op-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .op-card {
+    background: rgba(255,170,0,0.04);
+    border: 1px solid rgba(255,170,0,0.15);
+    padding: 16px;
+  }
+  .op-card-label { font-size: 0.58rem; color: #665533; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+  .op-card-value { font-family: 'Orbitron', sans-serif; font-size: 1.4rem; color: var(--gold2); }
+  .op-card-sub { font-size: 0.6rem; color: #554422; margin-top: 3px; }
+
+  /* Form */
+  .op-input {
+    width: 100%;
+    background: rgba(0,0,0,0.45);
+    border: 1px solid rgba(255,170,0,0.2);
+    color: var(--gold2);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.78rem;
+    padding: 7px 10px;
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color 0.15s;
+  }
+  .op-input:focus { border-color: var(--gold); }
+  .op-textarea { min-height: 70px; resize: vertical; margin-bottom: 8px; }
+  .op-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+  .op-grid3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; margin-bottom: 10px; }
+  .op-grid4 { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; margin-bottom: 10px; }
+  .op-field { display: flex; flex-direction: column; gap: 4px; }
+  .op-field label { font-size: 0.58rem; color: #886622; text-transform: uppercase; letter-spacing: 1px; }
+  .op-row { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; align-items: flex-start; }
+
+  /* Buttons */
+  .op-btn {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.54rem;
+    letter-spacing: 1.5px;
+    padding: 8px 16px;
+    border: 1px solid rgba(255,170,0,0.4);
+    background: rgba(180,100,0,0.12);
+    color: #ffcc77;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .op-btn:hover { background: rgba(180,100,0,0.28); border-color: var(--gold); }
+  .op-btn.full { width: 100%; margin-bottom: 4px; }
+  .op-btn.danger { border-color: rgba(255,80,0,0.4); color: #ff8855; background: rgba(180,40,0,0.1); }
+  .op-btn.danger:hover { background: rgba(180,40,0,0.25); border-color: #ff6600; }
+
+  /* Player table */
+  .op-table-wrap { overflow-x: auto; }
+  .op-table { width: 100%; border-collapse: collapse; font-size: 0.72rem; }
+  .op-table thead th {
+    text-align: left; padding: 8px 10px;
+    font-size: 0.56rem; letter-spacing: 1px; text-transform: uppercase; color: #665533;
+    border-bottom: 1px solid rgba(255,170,0,0.15);
+    background: rgba(0,0,0,0.3);
+  }
+  .op-table tbody tr { border-bottom: 1px solid rgba(255,170,0,0.05); transition: background 0.1s; }
+  .op-table tbody tr:hover { background: rgba(255,170,0,0.04); }
+  .op-table td { padding: 8px 10px; }
+  .op-row-btn {
+    font-family: 'Orbitron', sans-serif; font-size: 0.48rem; letter-spacing: 0.5px;
+    padding: 3px 8px; border: 1px solid rgba(255,170,0,0.25); background: rgba(255,170,0,0.04);
+    color: #aa8844; cursor: pointer; transition: all 0.12s; margin-right: 3px;
+  }
+  .op-row-btn:hover { border-color: var(--gold); color: var(--gold2); }
+  .op-row-btn.d { border-color: rgba(255,80,0,0.3); color: #ff8855; }
+  .op-row-btn.d:hover { border-color: #ff6600; background: rgba(180,40,0,0.1); }
+
+  /* Edit drawer */
+  .op-drawer {
+    background: rgba(255,170,0,0.03);
+    border: 1px solid rgba(255,170,0,0.15);
+    padding: 16px;
+    margin-top: 12px;
+    display: none;
+  }
+  .op-drawer.open { display: block; }
+  .op-info-card {
+    background: rgba(0,0,0,0.3);
+    border: 1px solid rgba(255,170,0,0.12);
+    padding: 10px 14px;
+    margin-bottom: 14px;
+    font-size: 0.7rem;
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    color: #886622;
+  }
+  .op-info-card strong { color: var(--gold2); }
+
+  /* Rank badges */
+  .badge-owner  { color: #ffaa00; }
+  .badge-admin  { color: #ff6666; }
+  .badge-mod    { color: #57f287; }
+  .badge-og     { color: #5dade2; }
+  .badge-vip    { color: #bf69ff; }
+
+  /* Event grid */
+  .op-event-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; margin-bottom: 8px; }
+  .op-event-card {
+    background: rgba(255,170,0,0.04); border: 1px solid rgba(255,170,0,0.18);
+    padding: 14px 10px; cursor: pointer; transition: all 0.15s; text-align: center;
+  }
+  .op-event-card:hover { background: rgba(255,170,0,0.12); border-color: var(--gold); }
+  .op-event-card.clear { border-color: rgba(255,80,0,0.25); }
+  .op-event-card.clear:hover { background: rgba(180,40,0,0.18); border-color: #ff6600; }
+  .ev-icon { font-size: 1.5rem; margin-bottom: 5px; }
+  .ev-name { font-family: 'Orbitron', sans-serif; font-size: 0.54rem; color: #ffcc77; letter-spacing: 1px; }
+  .ev-sub  { font-size: 0.57rem; color: #554422; margin-top: 3px; }
+
+  /* Broadcast presets */
+  .op-preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .op-preset {
+    font-family: 'Orbitron', sans-serif; font-size: 0.5rem; letter-spacing: 1px;
+    padding: 7px 10px; border: 1px solid rgba(255,170,0,0.15); background: rgba(255,170,0,0.03);
+    color: #665533; cursor: pointer; transition: all 0.15s; text-align: left;
+  }
+  .op-preset:hover { background: rgba(255,170,0,0.09); color: #ffcc66; border-color: rgba(255,170,0,0.4); }
+
+  /* IP rows */
+  .op-ip-row {
+    background: rgba(255,170,0,0.02);
+    border: 1px solid rgba(255,170,0,0.08);
+    padding: 8px 12px;
+    margin-bottom: 4px;
+  }
+  .op-ip-row.shared { border-color: rgba(255,68,0,0.4); background: rgba(255,68,0,0.05); }
+
+  /* Infobox */
+  .op-infobox {
+    background: rgba(0,0,0,0.3);
+    border: 1px solid rgba(255,170,0,0.1);
+    padding: 10px 14px;
+    font-size: 0.7rem;
+    color: #886622;
+    line-height: 1.9;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+
+  /* Danger cards */
+  .op-danger-card { background: rgba(180,0,0,0.06); border: 1px solid rgba(180,40,0,0.3); padding: 16px; margin-bottom: 12px; }
+  .op-danger-card.critical { border-color: rgba(255,0,0,0.6); }
+  .op-dc-title { font-family: 'Orbitron', sans-serif; font-size: 0.62rem; color: #ff7755; letter-spacing: 1px; margin-bottom: 4px; }
+  .op-dc-sub { font-size: 0.64rem; color: #884444; margin-bottom: 10px; line-height: 1.5; }
+  .op-dc-btn {
+    width: 100%; padding: 9px; font-family: 'Orbitron', sans-serif; font-size: 0.56rem;
+    letter-spacing: 2px; border: 1px solid rgba(255,80,0,0.4); background: rgba(180,30,0,0.12);
+    color: #ff8866; cursor: pointer; transition: all 0.15s;
+  }
+  .op-dc-btn:hover { background: rgba(180,30,0,0.3); border-color: #ff4400; }
+  .op-dc-btn.critical { border-color: rgba(255,0,0,0.6); color: #ff4444; }
+  .op-dc-btn.critical:hover { background: rgba(200,0,0,0.2); border-color: #ff0000; }
+
+  /* Toast */
+  #op-toast {
+    position: fixed; bottom: 24px; right: 24px;
+    font-family: 'Orbitron', sans-serif; font-size: 0.6rem; letter-spacing: 1px;
+    padding: 10px 18px; border: 1px solid var(--gold); background: rgba(20,14,0,0.95);
+    color: var(--gold2); z-index: 9999; display: none;
+    animation: toastIn 0.2s ease;
+  }
+  @keyframes toastIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
+  ::-webkit-scrollbar-thumb { background: rgba(255,170,0,0.2); }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,170,0,0.4); }
+
+  @media (max-width: 600px) {
+    .op-grid2, .op-grid3, .op-grid4 { grid-template-columns: 1fr 1fr; }
+    .op-event-grid { grid-template-columns: 1fr 1fr; }
+    .op-preset-grid { grid-template-columns: 1fr; }
+    .op-content { padding: 14px; }
+  }
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=VT323&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<div id="op-toast"></div>
+
+<!-- ══════════════════════════════════
+     AUTH GATE — Passphrase + Login
+══════════════════════════════════ -->
+<div id="auth-screen">
+  <div class="auth-box">
+    <div class="auth-crown">👑</div>
+    <div class="auth-title">OWNER PORTAL</div>
+    <div class="auth-sub">RESTRICTED ACCESS</div>
+
+    <div class="auth-field">
+      <label class="auth-label">Passphrase</label>
+      <input class="auth-input" id="auth-passphrase" type="password" placeholder="enter secret passphrase…" autocomplete="off">
+    </div>
+    <div class="auth-field">
+      <label class="auth-label">Owner Username</label>
+      <input class="auth-input" id="auth-user" type="text" placeholder="your username…" autocomplete="off">
+    </div>
+    <div class="auth-field">
+      <label class="auth-label">Password</label>
+      <input class="auth-input" id="auth-pass" type="password" placeholder="your account password…">
+    </div>
+    <button class="auth-btn" id="auth-btn" onclick="authLogin()">ENTER OWNER PANEL</button>
+    <div class="auth-error" id="auth-error"></div>
+    <div class="auth-hint">
+      This page is not linked from the game.<br>
+      Access requires the secret passphrase set by you.
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════
+     OWNER PANEL
+══════════════════════════════════ -->
+<div id="owner-panel">
+  <!-- Header -->
+  <div class="op-header">
+    <div class="op-header-left">
+      <div class="op-logo">👑 CAPITAL <span>RNG</span></div>
+      <div class="op-user-badge" id="op-who">—</div>
+    </div>
+    <div id="op-stat-bar" class="op-stat-bar"></div>
+    <div class="op-header-right">
+      <button class="op-logout-btn" onclick="doLogout()">LOGOUT</button>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="op-tabs">
+    <button class="op-tab active" onclick="switchTab('dashboard',this)">◈ DASHBOARD</button>
+    <button class="op-tab" onclick="switchTab('players',this)">👥 PLAYERS</button>
+    <button class="op-tab" onclick="switchTab('ranks',this)">🎖 RANKS</button>
+    <button class="op-tab" onclick="switchTab('economy',this)">⚡ ECONOMY</button>
+    <button class="op-tab" onclick="switchTab('ips',this)">🔍 IP LOGS</button>
+    <button class="op-tab" onclick="switchTab('broadcast',this)">📢 BROADCAST</button>
+    <button class="op-tab" onclick="switchTab('server',this)">🌐 SERVER</button>
+    <button class="op-tab danger-tab" onclick="switchTab('danger',this)">☢ DANGER</button>
+  </div>
+
+  <div class="op-content">
+
+    <!-- ══ DASHBOARD ══ -->
+    <div class="op-section active" id="tab-dashboard">
+      <div class="op-shead">◈ Server Overview</div>
+      <div class="op-cards" id="dash-cards">
+        <div class="op-card"><div class="op-card-label">Total Players</div><div class="op-card-value" id="dc-players">—</div></div>
+        <div class="op-card"><div class="op-card-label">Admins</div><div class="op-card-value" id="dc-admins" style="color:#ff8888">—</div></div>
+        <div class="op-card"><div class="op-card-label">Mods</div><div class="op-card-value" id="dc-mods" style="color:#57f287">—</div></div>
+        <div class="op-card"><div class="op-card-label">VIPs</div><div class="op-card-value" id="dc-vips" style="color:#bf69ff">—</div></div>
+        <div class="op-card"><div class="op-card-label">OGs</div><div class="op-card-value" id="dc-ogs" style="color:#5dade2">—</div></div>
+        <div class="op-card"><div class="op-card-label">Total Rolls</div><div class="op-card-value" id="dc-rolls" style="font-size:0.95rem">—</div></div>
+        <div class="op-card"><div class="op-card-label">Avg Luck Lv</div><div class="op-card-value" id="dc-avgluck">—</div></div>
+        <div class="op-card"><div class="op-card-label">Top Prestige</div><div class="op-card-value" id="dc-prestige">—</div></div>
+      </div>
+
+      <div class="op-shead">🏆 Top 5 Players</div>
+      <div id="dash-top5" class="op-infobox" style="margin-bottom:20px">Loading…</div>
+
+      <div class="op-shead">🗒 Recent Actions</div>
+      <div id="dash-log" class="op-infobox">No actions yet this session.</div>
+    </div>
+
+    <!-- ══ PLAYERS ══ -->
+    <div class="op-section" id="tab-players">
+      <div class="op-row" style="margin-bottom:12px">
+        <input id="player-search" class="op-input" style="flex:1;max-width:300px" type="text" placeholder="🔍 Search players…" oninput="filterPlayerTable()">
+        <button class="op-btn" onclick="loadPlayers()">↻ Refresh</button>
+        <button class="op-btn danger" onclick="confirmBulkReset()">🔄 Reset All</button>
+        <button class="op-btn danger" onclick="confirmBulkMaxLuck()">🍀 Max Luck All</button>
+      </div>
+      <div class="op-table-wrap">
+        <table class="op-table">
+          <thead>
+            <tr>
+              <th>Username</th>
+              <th>Rank</th>
+              <th>Score</th>
+              <th>Luck / Prestige</th>
+              <th>Rolls</th>
+              <th>Joined</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="players-tbody">
+            <tr><td colspan="7" style="color:#554422;padding:20px;text-align:center">Click Refresh to load players</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Edit drawer -->
+      <div class="op-drawer" id="edit-drawer">
+        <div class="op-info-card" id="edit-info-card"></div>
+        <div class="op-grid3">
+          <div class="op-field"><label>Score</label><input id="e-score" class="op-input" type="number"></div>
+          <div class="op-field"><label>Luck Level</label><input id="e-luck" class="op-input" type="number" min="1" max="100"></div>
+          <div class="op-field"><label>Prestige</label><input id="e-prestige" class="op-input" type="number" min="0"></div>
+          <div class="op-field"><label>Total Rolls</label><input id="e-rolls" class="op-input" type="number" min="0"></div>
+          <div class="op-field"><label>Void Rolls</label><input id="e-void" class="op-input" type="number" min="0"></div>
+          <div class="op-field"><label>Omega Rolls</label><input id="e-omega" class="op-input" type="number" min="0"></div>
+        </div>
+        <div class="op-shead" style="margin-top:4px">Upgrades</div>
+        <div class="op-grid4">
+          <div class="op-field"><label>Mult</label><input id="e-mult" class="op-input" type="number" min="0" max="100"></div>
+          <div class="op-field"><label>CD</label><input id="e-cd" class="op-input" type="number" min="0" max="100"></div>
+          <div class="op-field"><label>Auto</label><input id="e-auto" class="op-input" type="number" min="0" max="100"></div>
+          <div class="op-field"><label>Vault</label><input id="e-vault" class="op-input" type="number" min="0" max="100"></div>
+          <div class="op-field"><label>XP</label><input id="e-xp" class="op-input" type="number" min="0" max="100"></div>
+          <div class="op-field"><label>Crit</label><input id="e-crit" class="op-input" type="number" min="0" max="100"></div>
+          <div class="op-field"><label>VoidUpg</label><input id="e-voidupg" class="op-input" type="number" min="0" max="100"></div>
+          <div class="op-field"><label>Echo</label><input id="e-echo" class="op-input" type="number" min="0" max="100"></div>
+          <div class="op-field"><label>Soul</label><input id="e-soul" class="op-input" type="number" min="0" max="100"></div>
+          <div class="op-field"><label>Asc</label><input id="e-asc" class="op-input" type="number" min="0" max="100"></div>
+          <div class="op-field"><label>Time</label><input id="e-time" class="op-input" type="number" min="0" max="100"></div>
+          <div class="op-field"><label>Forge</label><input id="e-forge" class="op-input" type="number" min="0" max="100"></div>
+        </div>
+        <div class="op-field" style="margin-bottom:10px"><label>New Password <span style="color:#443322">(blank = keep)</span></label><input id="e-password" class="op-input" type="text" placeholder="6+ chars…"></div>
+        <div class="op-row">
+          <button class="op-btn" onclick="editMaxAll()">⚡ MAX ALL</button>
+          <button class="op-btn" onclick="saveEdit()">💾 SAVE</button>
+          <button class="op-btn danger" onclick="resetEdit()">↺ RESET</button>
+          <button class="op-btn danger" onclick="deleteEdit()">🗑 DELETE</button>
+          <button class="op-btn" onclick="closeEdit()">✕ CLOSE</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ RANKS ══ -->
+    <div class="op-section" id="tab-ranks">
+      <div class="op-shead">👑 Owner Rank</div>
+      <p class="op-desc" style="color:#aa6622">Only you can assign this. Gives complete control of the server.</p>
+      <div class="op-grid2">
+        <div class="op-field">
+          <label>Give Owner To</label>
+          <select id="r-owner-give" class="op-input"><option value="">— Select player —</option></select>
+        </div>
+        <div class="op-field">
+          <label>Remove Owner From</label>
+          <select id="r-owner-remove" class="op-input"><option value="">— Select player —</option></select>
+        </div>
+      </div>
+      <div class="op-row">
+        <button class="op-btn" style="border-color:#ffaa00;color:#ffdd88" onclick="rankAction('r-owner-give','isOwner',true)">👑 GIVE OWNER</button>
+        <button class="op-btn danger" onclick="rankAction('r-owner-remove','isOwner',false)">✂ REMOVE OWNER</button>
+      </div>
+
+      <div class="op-divider"></div>
+      <div class="op-shead">👑 Co-Owner</div>
+      <p class="op-desc">Co-Owners have access to the Owner Panel.</p>
+      <select id="r-coowner" class="op-input" style="margin-bottom:8px"><option value="">— Select player —</option></select>
+      <div class="op-row">
+        <button class="op-btn" onclick="rankAction('r-coowner','isOwner2',true)">👑 MAKE CO-OWNER</button>
+        <button class="op-btn danger" onclick="rankAction('r-coowner','isOwner2',false)">✂ REMOVE CO-OWNER</button>
+      </div>
+
+      <div class="op-divider"></div>
+      <div class="op-shead">🛡 Admin</div>
+      <select id="r-admin" class="op-input" style="margin-bottom:8px"><option value="">— Select player —</option></select>
+      <div class="op-row">
+        <button class="op-btn" onclick="rankAction('r-admin','isAdmin',true)">🛡 MAKE ADMIN</button>
+        <button class="op-btn danger" onclick="rankAction('r-admin','isAdmin',false)">✂ REMOVE ADMIN</button>
+        <button class="op-btn danger" onclick="demoteAllAdmins()">🔴 DEMOTE ALL ADMINS</button>
+      </div>
+
+      <div class="op-divider"></div>
+      <div class="op-shead">🔨 Mod</div>
+      <select id="r-mod" class="op-input" style="margin-bottom:8px"><option value="">— Select player —</option></select>
+      <div class="op-row">
+        <button class="op-btn" onclick="rankAction('r-mod','isMod',true)">🔨 MAKE MOD</button>
+        <button class="op-btn danger" onclick="rankAction('r-mod','isMod',false)">✂ REMOVE MOD</button>
+      </div>
+
+      <div class="op-divider"></div>
+      <div class="op-shead" style="color:#5dade2">🌊 OG &amp; 💎 VIP</div>
+      <select id="r-special" class="op-input" style="margin-bottom:8px"><option value="">— Select player —</option></select>
+      <div class="op-row" style="flex-wrap:wrap">
+        <button class="op-btn" style="border-color:#5dade2;color:#5dade2" onclick="rankAction('r-special','isOG',true)">🌊 MAKE OG</button>
+        <button class="op-btn danger" onclick="rankAction('r-special','isOG',false)">✂ REMOVE OG</button>
+        <button class="op-btn" style="border-color:#bf69ff;color:#bf69ff" onclick="rankAction('r-special','isVIP',true)">💎 MAKE VIP</button>
+        <button class="op-btn danger" onclick="rankAction('r-special','isVIP',false)">✂ REMOVE VIP</button>
+      </div>
+
+      <div class="op-divider"></div>
+      <div class="op-shead">⚡ Mass Rank</div>
+      <div class="op-row" style="flex-wrap:wrap">
+        <button class="op-btn" style="border-color:#bf69ff;color:#bf69ff" onclick="massRank('isVIP',true)">💎 VIP ALL</button>
+        <button class="op-btn" style="border-color:#5dade2;color:#5dade2" onclick="massRank('isOG',true)">🌊 OG ALL</button>
+        <button class="op-btn danger" onclick="massRank('isVIP',false)">✂ STRIP ALL VIP</button>
+        <button class="op-btn danger" onclick="massRank('isOG',false)">✂ STRIP ALL OG</button>
+      </div>
+
+      <div class="op-divider"></div>
+      <div class="op-shead">📋 Current Staff</div>
+      <button class="op-btn" style="margin-bottom:8px" onclick="loadStaff()">↻ Load Staff List</button>
+      <div id="staff-list" class="op-infobox">Click to load…</div>
+    </div>
+
+    <!-- ══ ECONOMY ══ -->
+    <div class="op-section" id="tab-economy">
+      <div class="op-shead">⚡ Global Multipliers</div>
+      <div class="op-grid2">
+        <div class="op-field"><label>Score Multiplier</label><input id="eco-score-mult" class="op-input" type="number" min="1" step="0.5" value="1"></div>
+        <div class="op-field"><label>XP Rate Multiplier</label><input id="eco-xp-mult" class="op-input" type="number" min="0.5" step="0.5" value="1"></div>
+      </div>
+      <div class="op-row">
+        <button class="op-btn" onclick="applyMults()">⚡ APPLY MULTIPLIERS</button>
+        <button class="op-btn danger" onclick="resetMults()">↺ RESET TO 1×</button>
+      </div>
+      <div id="eco-active" class="op-status">No active event</div>
+
+      <div class="op-divider"></div>
+      <div class="op-shead">🎲 Event Presets</div>
+      <div class="op-event-grid">
+        <button class="op-event-card" onclick="applyEvent('⚡ DOUBLE XP',1,2)">
+          <div class="ev-icon">⚡</div><div class="ev-name">2× XP</div><div class="ev-sub">Double luck XP</div>
+        </button>
+        <button class="op-event-card" onclick="applyEvent('💎 MEGA SCORE',5,1)">
+          <div class="ev-icon">💎</div><div class="ev-name">5× Score</div><div class="ev-sub">5× multiplier</div>
+        </button>
+        <button class="op-event-card" onclick="applyEvent('🌙 LUNAR LUCK',1,3)">
+          <div class="ev-icon">🌙</div><div class="ev-name">Lunar Luck</div><div class="ev-sub">3× XP</div>
+        </button>
+        <button class="op-event-card" onclick="applyEvent('🔥 MEGA EVENT',10,5)">
+          <div class="ev-icon">🔥</div><div class="ev-name">10× MEGA</div><div class="ev-sub">10× score + 5× XP</div>
+        </button>
+        <button class="op-event-card" onclick="applyEvent('🎉 WEEKEND BONUS',2,2)">
+          <div class="ev-icon">🎉</div><div class="ev-name">Weekend Bonus</div><div class="ev-sub">2× everything</div>
+        </button>
+        <button class="op-event-card clear" onclick="clearEvent()">
+          <div class="ev-icon">✕</div><div class="ev-name">Clear Event</div><div class="ev-sub">Reset to 1×</div>
+        </button>
+      </div>
+
+      <div class="op-divider"></div>
+      <div class="op-shead">🔧 Custom Event</div>
+      <div class="op-grid3">
+        <div class="op-field"><label>Event Name</label><input id="eco-evt-name" class="op-input" type="text" placeholder="e.g. Summer Fest"></div>
+        <div class="op-field"><label>Score Mult</label><input id="eco-evt-score" class="op-input" type="number" min="1" step="0.5" value="1"></div>
+        <div class="op-field"><label>XP Mult</label><input id="eco-evt-xp" class="op-input" type="number" min="0.5" step="0.5" value="1"></div>
+      </div>
+      <button class="op-btn" onclick="applyCustomEvent()">🚀 LAUNCH CUSTOM EVENT</button>
+    </div>
+
+    <!-- ══ IP LOGS ══ -->
+    <div class="op-section" id="tab-ips">
+      <div class="op-shead">🔍 IP Address Log</div>
+      <div class="op-row" style="margin-bottom:10px">
+        <input id="ip-search" class="op-input" style="flex:1;max-width:300px" type="text" placeholder="Search username or IP…" oninput="renderIPs()">
+        <button class="op-btn" onclick="loadIPs()">↻ Refresh</button>
+      </div>
+      <div id="ip-banner" style="display:none;background:rgba(255,68,0,0.1);border:1px solid rgba(255,68,0,0.4);padding:10px 14px;margin-bottom:10px;font-size:0.72rem;color:#ff6644"></div>
+      <div id="ip-list" style="max-height:500px;overflow-y:auto">
+        <div style="color:#554422;padding:14px">Click Refresh to load IP data…</div>
+      </div>
+    </div>
+
+    <!-- ══ BROADCAST ══ -->
+    <div class="op-section" id="tab-broadcast">
+      <div class="op-shead">📢 Live Broadcast</div>
+      <p class="op-desc">Message shown to all in-game players on their next action.</p>
+      <textarea id="bc-msg" class="op-input op-textarea" placeholder="Type your message…"></textarea>
+      <div class="op-row">
+        <button class="op-btn" onclick="sendBroadcast()">📢 SEND BROADCAST</button>
+        <button class="op-btn danger" onclick="clearBroadcast()">✕ CLEAR</button>
+      </div>
+      <div class="op-divider"></div>
+      <div class="op-shead">💬 Quick Presets</div>
+      <div class="op-preset-grid">
+        <button class="op-preset" onclick="setPreset('🎉 Welcome to Capital RNG! Roll your fortune!')">🎉 Welcome</button>
+        <button class="op-preset" onclick="setPreset('🔧 Server maintenance in 10 min. Save your progress!')">🔧 Maintenance</button>
+        <button class="op-preset" onclick="setPreset('⚡ DOUBLE XP EVENT is LIVE! 2× luck XP on all rolls!')">⚡ 2× XP</button>
+        <button class="op-preset" onclick="setPreset('💎 MEGA SCORE: 5× score multiplier is now active!')">💎 5× Score</button>
+        <button class="op-preset" onclick="setPreset('🌙 Lunar Luck event — 3× XP on all rolls until midnight!')">🌙 Lunar</button>
+        <button class="op-preset" onclick="setPreset('🏆 New season just started! Compete for the leaderboard!')">🏆 New Season</button>
+        <button class="op-preset" onclick="setPreset('⚠ Major update coming soon. Stay tuned!')">⚠ Update Teaser</button>
+        <button class="op-preset" onclick="setPreset('🔒 Server closing for maintenance shortly.')">🔒 Closing</button>
+      </div>
+      <div class="op-divider"></div>
+      <div class="op-shead">📋 Session History</div>
+      <div id="bc-history" class="op-infobox">No broadcasts this session.</div>
+    </div>
+
+    <!-- ══ SERVER ══ -->
+    <div class="op-section" id="tab-server">
+      <div class="op-shead">🌐 Server Identity</div>
+      <div class="op-grid2">
+        <div class="op-field"><label>Server Name</label><input id="srv-name" class="op-input" type="text" value="Capital RNG"></div>
+        <div class="op-field"><label>MOTD (shown on login)</label><input id="srv-motd" class="op-input" type="text" placeholder="Welcome!"></div>
+      </div>
+      <button class="op-btn" onclick="saveIdentity()">💾 SAVE IDENTITY</button>
+
+      <div class="op-divider"></div>
+      <div class="op-shead">🔒 Signup Lock</div>
+      <p class="op-desc">Lock the server to prevent new account registrations. Existing players unaffected.</p>
+      <div class="op-row">
+        <button class="op-btn" onclick="setLock(true)">🔒 LOCK SIGNUPS</button>
+        <button class="op-btn danger" onclick="setLock(false)">🔓 UNLOCK SIGNUPS</button>
+      </div>
+      <div id="lock-status" class="op-status">Status: Unknown</div>
+
+      <div class="op-divider"></div>
+      <div class="op-shead">🔑 Change Passphrase</div>
+      <p class="op-desc">Change the secret passphrase required to access this owner page.</p>
+      <div class="op-grid2">
+        <div class="op-field"><label>New Passphrase</label><input id="new-passphrase" class="op-input" type="password" placeholder="new secret phrase…"></div>
+        <div class="op-field"><label>Confirm Passphrase</label><input id="confirm-passphrase" class="op-input" type="password" placeholder="confirm…"></div>
+      </div>
+      <button class="op-btn" onclick="changePassphrase()">🔑 UPDATE PASSPHRASE</button>
+    </div>
+
+    <!-- ══ DANGER ══ -->
+    <div class="op-section" id="tab-danger">
+      <div style="background:rgba(180,0,0,0.12);border:1px solid rgba(255,0,0,0.3);padding:14px 16px;margin-bottom:20px">
+        <div style="font-family:'Orbitron',sans-serif;font-size:0.65rem;color:#ff4444;letter-spacing:2px;margin-bottom:4px">☢ DANGER ZONE — ALL ACTIONS ARE IRREVERSIBLE</div>
+        <div style="font-size:0.67rem;color:#aa4444;line-height:1.6">Every action below requires double confirmation and <strong style="color:#ff4444">cannot be undone</strong>. Proceed with extreme caution.</div>
+      </div>
+
+      <div class="op-danger-card">
+        <div class="op-dc-title">💣 Wipe All Scores</div>
+        <div class="op-dc-sub">Sets every player's score to 0. Accounts, upgrades and ranks are preserved.</div>
+        <button class="op-dc-btn" onclick="dangerWipeScores()">💣 WIPE ENTIRE LEADERBOARD</button>
+      </div>
+
+      <div class="op-danger-card">
+        <div class="op-dc-title">🔄 Reset All Progress</div>
+        <div class="op-dc-sub">Resets score, luck level, all upgrades and achievements for every player.</div>
+        <button class="op-dc-btn" onclick="dangerResetAll()">🔄 RESET EVERYONE'S PROGRESS</button>
+      </div>
+
+      <div class="op-danger-card">
+        <div class="op-dc-title">🔴 Demote All Admins</div>
+        <div class="op-dc-sub">Strips admin rank from all admin accounts. Root admin and yourself are protected.</div>
+        <button class="op-dc-btn" onclick="demoteAllAdmins()">🔴 DEMOTE ALL ADMINS</button>
+      </div>
+
+      <div class="op-danger-card critical">
+        <div class="op-dc-title" style="color:#ff3333">☢ Delete All Regular Players</div>
+        <div class="op-dc-sub">Permanently deletes every non-admin, non-owner account. Cannot be undone.</div>
+        <button class="op-dc-btn critical" onclick="dangerDeleteNonAdmins()">☢ DELETE ALL NON-ADMIN USERS</button>
+      </div>
+
+      <div class="op-danger-card critical" style="border-color:rgba(255,0,0,0.7)">
+        <div class="op-dc-title" style="color:#ff0000">💀 FULL DATABASE NUKE</div>
+        <div class="op-dc-sub" style="color:#aa2222">Deletes <strong style="color:#ff4444">every single account</strong> except root admin. The game will be completely empty.</div>
+        <button class="op-dc-btn critical" style="border-color:#ff0000;background:rgba(200,0,0,0.15)" onclick="dangerNukeAll()">💀 NUKE ENTIRE DATABASE</button>
+      </div>
+    </div>
+
+  </div><!-- /content -->
+</div><!-- /owner-panel -->
+
+<script>
+// ══════════════════════════════════════════
+//  CONFIG  ← change these two values
+// ══════════════════════════════════════════
+const API_BASE   = 'https://game-backend-sdzk.onrender.com';
+const PASSPHRASE_KEY = 'owner_passphrase'; // localStorage key storing the hashed phrase
+
+// Default passphrase (SHA-256 of "capitalrng-owner-2024")
+// To change it, log in and use the "Change Passphrase" section in the SERVER tab.
+// Or change the string below and it becomes the new default on first load.
+const DEFAULT_PASSPHRASE = 'capitalrng-owner-2024';
+
+// ══════════════════════════════════════════
+//  SIMPLE HASH (not crypto, but obfuscates)
+// ══════════════════════════════════════════
+async function hashPhrase(str) {
+  const buf  = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+async function getStoredHash() {
+  const stored = localStorage.getItem(PASSPHRASE_KEY);
+  if (stored) return stored;
+  // First load: hash and store the default
+  const h = await hashPhrase(DEFAULT_PASSPHRASE);
+  localStorage.setItem(PASSPHRASE_KEY, h);
+  return h;
+}
+
+// ══════════════════════════════════════════
+//  STATE
+// ══════════════════════════════════════════
+let _token    = null;
+let _users    = [];
+let _ipData   = [];
+let _bcHistory = [];
+let _editUID  = null;
+let _globalMult = 1;
+let _xpRate     = 1;
+let _currentUser = null;
+
+// ══════════════════════════════════════════
+//  AUTH
+// ══════════════════════════════════════════
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    if (document.getElementById('auth-screen').style.display !== 'none') authLogin();
+  }
+});
+
+async function authLogin() {
+  const phrase = document.getElementById('auth-passphrase').value;
+  const user   = document.getElementById('auth-user').value.trim();
+  const pass   = document.getElementById('auth-pass').value;
+  const errEl  = document.getElementById('auth-error');
+  const btn    = document.getElementById('auth-btn');
+
+  errEl.textContent = '';
+  if (!phrase || !user || !pass) { errEl.textContent = 'All fields required.'; return; }
+
+  // 1. Check passphrase
+  const inputHash  = await hashPhrase(phrase);
+  const storedHash = await getStoredHash();
+  if (inputHash !== storedHash) {
+    errEl.textContent = 'Incorrect passphrase.';
+    // Shake
+    document.querySelector('.auth-box').style.animation = 'none';
+    document.querySelector('.auth-box').offsetHeight;
+    return;
+  }
+
+  // 2. Login to API
+  btn.disabled = true; btn.textContent = 'AUTHENTICATING…';
+  try {
+    const res  = await fetch(`${API_BASE}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: user, password: pass }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Login failed');
+
+    // 3. Check owner rank
+    if (!data.user.isOwner && !data.user.isOwner2) {
+      errEl.textContent = 'Account does not have Owner rank.';
+      return;
+    }
+
+    _token       = data.token;
+    _currentUser = data.user;
+
+    // Enter panel
+    document.getElementById('auth-screen').style.display = 'none';
+    document.getElementById('owner-panel').style.display = 'flex';
+    document.getElementById('op-who').textContent = `👑 ${user}`;
+
+    await loadPlayers();
+    loadDashboard();
+
+  } catch(e) {
+    errEl.textContent = e.message;
+  } finally {
+    btn.disabled = false; btn.textContent = 'ENTER OWNER PANEL';
+  }
+}
+
+function doLogout() {
+  _token = null; _currentUser = null; _users = [];
+  document.getElementById('owner-panel').style.display = 'none';
+  document.getElementById('auth-screen').style.display = 'flex';
+  document.getElementById('auth-passphrase').value = '';
+  document.getElementById('auth-pass').value = '';
+  document.getElementById('auth-error').textContent = '';
+}
+
+// ══════════════════════════════════════════
+//  API
+// ══════════════════════════════════════════
+async function api(method, path, body) {
+  const opts = {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(_token ? { Authorization: 'Bearer ' + _token } : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  };
+  const res  = await fetch(API_BASE + path, opts);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'API error');
+  return data;
+}
+
+// ══════════════════════════════════════════
+//  TOAST
+// ══════════════════════════════════════════
+let _toastTimer;
+function toast(msg, ok = true) {
+  const el = document.getElementById('op-toast');
+  el.textContent = msg;
+  el.style.borderColor = ok ? 'var(--gold)' : '#ff4444';
+  el.style.color       = ok ? 'var(--gold2)' : '#ff8888';
+  el.style.display     = 'block';
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => { el.style.display = 'none'; }, 3000);
+  // Log to dashboard
+  const log = document.getElementById('dash-log');
+  if (log) {
+    const entry = document.createElement('div');
+    entry.style.cssText = 'border-bottom:1px solid rgba(255,170,0,0.07);padding:3px 0';
+    entry.innerHTML = `<span style="color:#443322">[${new Date().toLocaleTimeString()}]</span> ${msg}`;
+    log.insertBefore(entry, log.firstChild);
+    if (log.children.length > 20) log.removeChild(log.lastChild);
+    if (log.textContent === 'No actions yet this session.') log.innerHTML = '';
+  }
+}
+
+// ══════════════════════════════════════════
+//  TAB SWITCHING
+// ══════════════════════════════════════════
+function switchTab(name, el) {
+  document.querySelectorAll('.op-section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.op-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  el.classList.add('active');
+  if (name === 'ips')   loadIPs();
+  if (name === 'ranks') populateRankSelects();
+}
+
+// ══════════════════════════════════════════
+//  DASHBOARD
+// ══════════════════════════════════════════
+async function loadDashboard() {
+  try {
+    const data  = await api('GET', '/api/admin/users');
+    const users = data.users || [];
+    _users = users;
+
+    const q   = v => v ? fmt(v) : '0';
+    const set = (id, v) => { const el = document.getElementById(id); if(el) el.textContent = v; };
+
+    set('dc-players', users.length);
+    set('dc-admins',  users.filter(u => u.is_admin).length);
+    set('dc-mods',    users.filter(u => u.is_mod).length);
+    set('dc-vips',    users.filter(u => u.is_vip).length);
+    set('dc-ogs',     users.filter(u => u.is_og).length);
+    set('dc-rolls',   fmt(users.reduce((a,u) => a+(parseInt(u.total_rolls)||0), 0)));
+    set('dc-avgluck', users.length ? Math.round(users.reduce((a,u)=>a+(parseInt(u.luck_level)||1),0)/users.length) : 0);
+    set('dc-prestige',users.reduce((a,u)=>Math.max(a,parseInt(u.prestige_level)||0), 0));
+
+    // Stat bar in header
+    const bar = document.getElementById('op-stat-bar');
+    if (bar) bar.innerHTML = `<span>👥 ${users.length}</span><span>🛡 ${users.filter(u=>u.is_admin).length} admins</span><span>🔨 ${users.filter(u=>u.is_mod).length} mods</span>`;
+
+    // Top 5
+    const top5 = [...users].sort((a,b)=>(parseFloat(b.score)||0)-(parseFloat(a.score)||0)).slice(0,5);
+    const top5El = document.getElementById('dash-top5');
+    if (top5El) {
+      top5El.innerHTML = top5.map((u,i) => {
+        const badge = (u.is_owner||u.is_owner2)?'👑':u.is_admin?'🛡':u.is_mod?'🔨':'';
+        return `<div style="border-bottom:1px solid rgba(255,170,0,0.08);padding:4px 0">
+          <span style="color:#665533">#${i+1}</span>
+          <strong style="color:#ffdd88;margin:0 8px">${badge} ${u.username}</strong>
+          Score: ${fmt(parseFloat(u.score)||0)} | Luck Lv${u.luck_level||1} | Prestige ${u.prestige_level||0}
+        </div>`;
+      }).join('') || '<div style="color:#554422">No players yet.</div>';
+    }
+  } catch(e) { toast('❌ Dashboard load failed: ' + e.message, false); }
+}
+
+function fmt(n) {
+  if (!isFinite(n) || n === null) return '0';
+  if (n >= 1e15) return (n/1e15).toFixed(2)+'Qa';
+  if (n >= 1e12) return (n/1e12).toFixed(2)+'T';
+  if (n >= 1e9)  return (n/1e9).toFixed(2)+'B';
+  if (n >= 1e6)  return (n/1e6).toFixed(2)+'M';
+  if (n >= 1e3)  return (n/1e3).toFixed(1)+'K';
+  return Math.floor(n).toString();
+}
+
+// ══════════════════════════════════════════
+//  PLAYERS
+// ══════════════════════════════════════════
+async function loadPlayers() {
+  try {
+    const data = await api('GET', '/api/admin/users');
+    _users = data.users || [];
+    renderPlayerTable(_users);
+    populateRankSelects();
+    loadDashboard();
+  } catch(e) { toast('❌ Failed to load players: ' + e.message, false); }
+}
+
+function rankLabel(u) {
+  if (u.is_owner || u.is_owner2) return '<span class="badge-owner">👑 Owner</span>';
+  if (u.is_admin) return '<span class="badge-admin">🛡 Admin</span>';
+  if (u.is_mod)   return '<span class="badge-mod">🔨 Mod</span>';
+  if (u.is_og)    return '<span class="badge-og">🌊 OG</span>';
+  if (u.is_vip)   return '<span class="badge-vip">💎 VIP</span>';
+  return '<span style="color:#443322">—</span>';
+}
+
+function renderPlayerTable(users) {
+  const tbody = document.getElementById('players-tbody');
+  if (!tbody) return;
+  const q = (document.getElementById('player-search')?.value || '').toLowerCase();
+  const filtered = q ? users.filter(u => u.username.toLowerCase().includes(q)) : users;
+
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="color:#554422;padding:20px;text-align:center">No players found.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = filtered.map(u => {
+    const isRoot = u.id === 'uid_admin_root';
+    const col = (u.is_owner||u.is_owner2)?'#ffaa00':u.is_admin?'#ff8888':u.is_mod?'#57f287':'#aa8844';
+    return `<tr>
+      <td style="color:${col};font-weight:bold">${u.username}</td>
+      <td>${rankLabel(u)}</td>
+      <td style="color:#aa8844">${fmt(parseFloat(u.score)||0)}</td>
+      <td style="color:#886622">Lk${u.luck_level||1} / P${u.prestige_level||0}</td>
+      <td style="color:#665533">${(parseInt(u.total_rolls)||0).toLocaleString()}</td>
+      <td style="color:#443322;font-size:0.65rem">${u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}</td>
+      <td>
+        <button class="op-row-btn" onclick="openEdit('${u.id}')">✏ Edit</button>
+        ${!isRoot?`<button class="op-row-btn d" onclick="quickReset('${u.id}','${u.username}')">↺</button>`:''}
+        ${!isRoot?`<button class="op-row-btn d" onclick="quickDelete('${u.id}','${u.username}')">🗑</button>`:''}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function filterPlayerTable() { renderPlayerTable(_users); }
+
+async function quickReset(uid, uname) {
+  if (!confirm(`Reset ALL progress for "${uname}"?`)) return;
+  try { await api('POST', `/api/admin/reset/${uid}`); toast(`↺ Reset ${uname}`); await loadPlayers(); }
+  catch(e) { toast('❌ ' + e.message, false); }
+}
+
+async function quickDelete(uid, uname) {
+  if (!confirm(`DELETE "${uname}"? PERMANENT.`)) return;
+  if (!confirm('FINAL: Cannot be undone.')) return;
+  try { await api('DELETE', `/api/admin/user/${uid}`); toast(`🗑 Deleted ${uname}`); await loadPlayers(); closeEdit(); }
+  catch(e) { toast('❌ ' + e.message, false); }
+}
+
+async function confirmBulkReset() {
+  if (!confirm('Reset progress for ALL players?')) return;
+  if (!confirm('FINAL: Cannot be undone!')) return;
+  let c = 0;
+  for (const u of _users) { try { await api('POST', `/api/admin/reset/${u.id}`); c++; } catch {} }
+  toast(`🔄 Reset ${c} players`);
+  await loadPlayers();
+}
+
+async function confirmBulkMaxLuck() {
+  if (!confirm('Set luck to level 100 for ALL players?')) return;
+  let c = 0;
+  for (const u of _users) { try { await api('PATCH', `/api/admin/user/${u.id}`, { luckLevel: 100 }); c++; } catch {} }
+  toast(`🍀 Max luck applied to ${c} players`);
+}
+
+// ─── Edit drawer ───
+async function openEdit(uid) {
+  _editUID = uid;
+  try {
+    const data = await api('GET', `/api/admin/user/${uid}`);
+    const u = data.user, s = data.state || {};
+
+    const rank = (u.is_owner||u.is_owner2)?'👑 Owner':u.is_admin?'🛡 Admin':u.is_mod?'🔨 Mod':u.is_og?'🌊 OG':u.is_vip?'💎 VIP':'Player';
+    document.getElementById('edit-info-card').innerHTML =
+      `<strong>${u.username}</strong> <span>${rank}</span> <span style="color:#443322">${u.id}</span> <span>Joined ${u.created_at?new Date(u.created_at).toLocaleDateString():'?'}</span>`;
+
+    const f = (id, v) => { const el=document.getElementById(id); if(el) el.value=v; };
+    f('e-score',s.score||0); f('e-luck',s.luckLevel||1); f('e-prestige',s.prestigeLevel||0);
+    f('e-rolls',s.totalRolls||0); f('e-void',s.voidCount||0); f('e-omega',s.omegaCount||0);
+    f('e-mult',s.multLevel||0); f('e-cd',s.cdLevel||0); f('e-auto',s.autoLevel||0);
+    f('e-vault',s.vaultLevel||0); f('e-xp',s.xpLevel||0); f('e-crit',s.critLevel||0);
+    f('e-voidupg',s.voidupgLevel||0); f('e-echo',s.echoLevel||0); f('e-soul',s.soulLevel||0);
+    f('e-asc',s.ascLevel||0); f('e-time',s.timeLevel||0); f('e-forge',s.forgeLevel||0);
+    f('e-password','');
+
+    const drawer = document.getElementById('edit-drawer');
+    drawer.classList.add('open');
+    drawer.scrollIntoView({ behavior:'smooth', block:'nearest' });
+  } catch(e) { toast('❌ Failed to load: ' + e.message, false); }
+}
+
+function closeEdit() {
+  _editUID = null;
+  document.getElementById('edit-drawer').classList.remove('open');
+}
+
+function editMaxAll() {
+  ['e-luck','e-mult','e-cd','e-auto','e-vault','e-xp','e-crit','e-voidupg','e-echo','e-soul','e-asc','e-time','e-forge']
+    .forEach(id => { const el=document.getElementById(id); if(el) el.value=100; });
+  const s=document.getElementById('e-score'); if(s) s.value=1e15;
+  const p=document.getElementById('e-prestige'); if(p) p.value=100;
+}
+
+async function saveEdit() {
+  if (!_editUID) return;
+  const pf = k => { const v=parseFloat(document.getElementById(k)?.value); return isNaN(v)?0:v; };
+  const pi = k => { const v=parseInt(document.getElementById(k)?.value);   return isNaN(v)?0:v; };
+  const payload = {
+    score: pf('e-score'), luckLevel: Math.min(100,Math.max(1,pi('e-luck'))),
+    prestigeLevel: pi('e-prestige'), totalRolls: pi('e-rolls'),
+    voidCount: pi('e-void'), omegaCount: pi('e-omega'),
+    multLevel: pi('e-mult'), cdLevel: pi('e-cd'), autoLevel: pi('e-auto'),
+    vaultLevel: pi('e-vault'), xpLevel: pi('e-xp'), critLevel: pi('e-crit'),
+    voidupgLevel: pi('e-voidupg'), echoLevel: pi('e-echo'), soulLevel: pi('e-soul'),
+    ascLevel: pi('e-asc'), timeLevel: pi('e-time'), forgeLevel: pi('e-forge'),
+  };
+  const pw = document.getElementById('e-password')?.value?.trim();
+  if (pw) { if(pw.length<6){ toast('Password must be 6+ chars',false); return; } payload.password=pw; }
+  try {
+    await api('PATCH', `/api/admin/user/${_editUID}`, payload);
+    toast('✅ Player saved!');
+    document.getElementById('e-password').value = '';
+    await loadPlayers();
+  } catch(e) { toast('❌ Save failed: ' + e.message, false); }
+}
+
+async function resetEdit() {
+  if (!_editUID) return;
+  if (!confirm('Reset this player\'s progress?')) return;
+  try { await api('POST', `/api/admin/reset/${_editUID}`); toast('↺ Progress reset'); }
+  catch(e) { toast('❌ '+e.message, false); }
+}
+
+async function deleteEdit() {
+  if (!_editUID) return;
+  if (!confirm('DELETE this account? PERMANENT.')) return;
+  if (!confirm('FINAL: Cannot be undone.')) return;
+  try {
+    await api('DELETE', `/api/admin/user/${_editUID}`);
+    toast('🗑 Account deleted');
+    closeEdit();
+    await loadPlayers();
+  } catch(e) { toast('❌ '+e.message, false); }
+}
+
+// ══════════════════════════════════════════
+//  RANKS
+// ══════════════════════════════════════════
+function populateRankSelects() {
+  const opts = '<option value="">— Select player —</option>' +
+    _users.map(u => {
+      const badge = (u.is_owner||u.is_owner2)?'👑 ':u.is_admin?'🛡 ':u.is_mod?'🔨 ':'';
+      return `<option value="${u.id}">${badge}${u.username}</option>`;
+    }).join('');
+  ['r-owner-give','r-owner-remove','r-coowner','r-admin','r-mod','r-special'].forEach(id => {
+    const el = document.getElementById(id); if(el) el.innerHTML = opts;
+  });
+}
+
+async function rankAction(selectId, rankKey, value) {
+  const id = document.getElementById(selectId)?.value;
+  if (!id) { toast('Select a player first', false); return; }
+  const uname = document.querySelector(`#${selectId} option:checked`)?.textContent?.trim() || id;
+  const names = { isOwner:'Owner', isOwner2:'Co-Owner', isAdmin:'Admin', isMod:'Mod', isOG:'OG', isVIP:'VIP' };
+  const emojis = { isOwner:'👑', isOwner2:'👑', isAdmin:'🛡', isMod:'🔨', isOG:'🌊', isVIP:'💎' };
+  const name = names[rankKey]||rankKey;
+  if (!confirm(`${value?'Give':'Remove'} ${name} ${value?'to':'from'} ${uname}?`)) return;
+  try {
+    await api('PATCH', `/api/admin/user/${id}`, { [rankKey]: value });
+    toast(`${emojis[rankKey]||''} ${value?name+' granted to':name+' removed from'} ${uname}`);
+    await loadPlayers();
+  } catch(e) { toast('❌ '+e.message, false); }
+}
+
+async function massRank(rankKey, value) {
+  const name = { isVIP:'VIP', isOG:'OG' }[rankKey]||rankKey;
+  if (!confirm(`${value?'Give':'Remove'} ${name} ${value?'to':'from'} ALL players?`)) return;
+  let c=0;
+  for (const u of _users) { try { await api('PATCH',`/api/admin/user/${u.id}`,{[rankKey]:value}); c++; } catch {} }
+  toast(`${value?'✅':'✂'} ${name} ${value?'given to':'removed from'} ${c} players`);
+  await loadPlayers();
+}
+
+async function demoteAllAdmins() {
+  if (!confirm('Demote ALL admins? Root admin and yourself are protected.')) return;
+  const targets = _users.filter(u => u.is_admin && u.id !== _currentUser?.id && u.id !== 'uid_admin_root');
+  for (const u of targets) { try { await api('PATCH',`/api/admin/user/${u.id}`,{isAdmin:false}); } catch {} }
+  toast(`🔴 Demoted ${targets.length} admin(s)`);
+  await loadPlayers();
+}
+
+async function loadStaff() {
+  const el = document.getElementById('staff-list');
+  if (!el) return;
+  await loadPlayers();
+  const staff = _users.filter(u=>u.is_owner||u.is_owner2||u.is_admin||u.is_mod||u.is_og||u.is_vip);
+  if (!staff.length) { el.innerHTML='<div style="color:#443322">No ranked players.</div>'; return; }
+  el.innerHTML = staff.map(u=>{
+    const rank = (u.is_owner||u.is_owner2)?'👑 Owner':u.is_admin?'🛡 Admin':u.is_mod?'🔨 Mod':u.is_og?'🌊 OG':u.is_vip?'💎 VIP':'';
+    const col  = (u.is_owner||u.is_owner2)?'#ffaa00':u.is_admin?'#ff8888':u.is_mod?'#57f287':u.is_og?'#5dade2':'#bf69ff';
+    return `<div style="border-bottom:1px solid rgba(255,170,0,0.07);padding:5px 0;display:flex;justify-content:space-between">
+      <span style="color:#ffdd88">${u.username}</span><span style="color:${col};font-size:0.7rem">${rank}</span>
+    </div>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════
+//  ECONOMY
+// ══════════════════════════════════════════
+async function applyMults() {
+  const score = parseFloat(document.getElementById('eco-score-mult')?.value)||1;
+  const xp    = parseFloat(document.getElementById('eco-xp-mult')?.value)||1;
+  try {
+    await api('POST','/api/admin/settings',{ globalMult:score, xpRate:xp, broadcastMsg:score>1||xp>1?`⚡ Owner multipliers active: Score×${score} XP×${xp}`:'' });
+    _globalMult=score; _xpRate=xp;
+    const el=document.getElementById('eco-active'); if(el) el.textContent=`Active: Score×${score} XP×${xp}`;
+    toast(`⚡ Score×${score} XP×${xp} applied!`);
+  } catch(e) { toast('❌ '+e.message, false); }
+}
+
+async function resetMults() {
+  document.getElementById('eco-score-mult').value=1;
+  document.getElementById('eco-xp-mult').value=1;
+  await applyMults();
+  toast('↺ Multipliers reset to 1×');
+}
+
+async function applyEvent(name, scoreMult, xpMult) {
+  document.getElementById('eco-score-mult').value=scoreMult;
+  document.getElementById('eco-xp-mult').value=xpMult;
+  await applyMults();
+  try {
+    await api('POST','/api/admin/settings',{ globalMult:scoreMult, xpRate:xpMult, broadcastMsg:`🎉 EVENT: ${name} — Score×${scoreMult} | XP×${xpMult}` });
+  } catch {}
+  const el=document.getElementById('eco-active'); if(el) el.textContent=`Active event: ${name}`;
+  toast(`🎉 Event launched: ${name}`);
+}
+
+async function clearEvent() {
+  await resetMults();
+  try { await api('POST','/api/admin/settings',{ globalMult:1, xpRate:1, broadcastMsg:'' }); } catch {}
+  const el=document.getElementById('eco-active'); if(el) el.textContent='No active event';
+  toast('❌ Event cleared');
+}
+
+async function applyCustomEvent() {
+  const name  = document.getElementById('eco-evt-name')?.value?.trim()||'Custom Event';
+  const score = parseFloat(document.getElementById('eco-evt-score')?.value)||1;
+  const xp    = parseFloat(document.getElementById('eco-evt-xp')?.value)||1;
+  await applyEvent(name, score, xp);
+}
+
+// ══════════════════════════════════════════
+//  IP LOGS
+// ══════════════════════════════════════════
+async function loadIPs() {
+  const list=document.getElementById('ip-list');
+  if(list) list.innerHTML='<div style="color:#554422;padding:14px">Loading…</div>';
+  try {
+    const data=await api('GET','/api/owner/ips');
+    _ipData=data.users||[];
+    renderIPs();
+  } catch(e) { if(list) list.innerHTML=`<div style="color:#ff4444;padding:14px">❌ ${e.message}</div>`; }
+}
+
+function renderIPs() {
+  const list=document.getElementById('ip-list'), banner=document.getElementById('ip-banner');
+  if(!list) return;
+  const q=(document.getElementById('ip-search')?.value||'').toLowerCase();
+
+  const ipMap={};
+  _ipData.forEach(u=>{
+    const ips=u.ip_history?.length?u.ip_history:(u.last_ip?[u.last_ip]:[]);
+    ips.forEach(ip=>{ if(!ipMap[ip]) ipMap[ip]=[]; if(!ipMap[ip].includes(u.username)) ipMap[ip].push(u.username); });
+  });
+  const shared=Object.entries(ipMap).filter(([,n])=>n.length>1);
+
+  if(banner){
+    if(shared.length){
+      const victims=new Set(shared.flatMap(([,n])=>n)).size;
+      banner.style.display='block';
+      banner.textContent=`⚠ ${shared.length} shared IP${shared.length>1?'s':''} across ${victims} accounts — possible alts / ban evasion`;
+    } else { banner.style.display='none'; }
+  }
+
+  const filtered=_ipData.filter(u=>!q||u.username.toLowerCase().includes(q)||(u.last_ip||'').includes(q)||(u.ip_history||[]).some(ip=>ip.includes(q)));
+  if(!filtered.length){ list.innerHTML='<div style="color:#554422;padding:14px">No results.</div>'; return; }
+
+  list.innerHTML=filtered.map(u=>{
+    const ips=u.ip_history?.length?u.ip_history:(u.last_ip?[u.last_ip]:[]);
+    const userShared=ips.filter(ip=>ipMap[ip]?.length>1);
+    const rankCol=(u.is_owner||u.is_owner2)?'#ffaa00':u.is_admin?'#ff8888':u.is_mod?'#57f287':'#aaa';
+    const icon=u.is_owner?'👑':u.is_owner2?'👑':u.is_admin?'🛡':u.is_mod?'🔨':u.is_og?'🌊':u.is_vip?'💎':'👤';
+    return `<div class="op-ip-row ${userShared.length?'shared':''}">
+      <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+        <span style="color:${rankCol};font-weight:bold">${icon} ${u.username}</span>
+        <span style="color:#443322;font-size:0.6rem">${u.created_at?new Date(u.created_at).toLocaleDateString():''}</span>
+      </div>
+      <div style="font-size:0.68rem;margin-bottom:2px">
+        <span style="color:#554422">Last IP: </span>
+        <span style="color:${userShared.includes(u.last_ip)?'#ff8844':'#ffcc66'};font-family:monospace">${u.last_ip||'<i style="color:#332211">never</i>'}</span>
+      </div>
+      ${ips.length>1?`<div style="font-size:0.62rem;color:#443322;margin-top:2px">History: ${ips.map(ip=>{
+        const sh=ipMap[ip]?.length>1, others=sh?ipMap[ip].filter(n=>n!==u.username):[];
+        return `<span style="color:${sh?'#ff7744':'#665533'}" title="${sh?'⚠ Shared with: '+others.join(', '):ip}">${ip}${sh?' ⚠':''}</span>`;
+      }).join(' · ')}</div>`:''}
+      ${userShared.length?`<div style="color:#ff6622;font-size:0.65rem;margin-top:4px;font-weight:bold">⚠ Shares IP with: ${[...new Set(userShared.flatMap(ip=>ipMap[ip].filter(n=>n!==u.username)))].join(', ')}</div>`:''}
+    </div>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════
+//  BROADCAST
+// ══════════════════════════════════════════
+async function sendBroadcast() {
+  const msg=document.getElementById('bc-msg')?.value?.trim()||'';
+  try {
+    await api('POST','/api/admin/settings',{ globalMult:_globalMult, xpRate:_xpRate, broadcastMsg:msg });
+    if(msg){
+      _bcHistory.unshift({ msg, time:new Date().toLocaleTimeString() });
+      if(_bcHistory.length>15) _bcHistory.pop();
+      renderBCHistory();
+    }
+    toast(msg?'📢 Broadcast sent!':'🗑 Broadcast cleared');
+  } catch(e){ toast('❌ '+e.message,false); }
+}
+
+async function clearBroadcast() {
+  document.getElementById('bc-msg').value='';
+  try { await api('POST','/api/admin/settings',{ globalMult:_globalMult, xpRate:_xpRate, broadcastMsg:'' }); toast('🗑 Broadcast cleared'); }
+  catch(e){ toast('❌ '+e.message,false); }
+}
+
+function setPreset(msg){ document.getElementById('bc-msg').value=msg; }
+
+function renderBCHistory(){
+  const el=document.getElementById('bc-history'); if(!el) return;
+  el.innerHTML=_bcHistory.length
+    ?_bcHistory.map(b=>`<div style="border-bottom:1px solid rgba(255,170,0,0.07);padding:3px 0"><span style="color:#443322">[${b.time}]</span> ${b.msg}</div>`).join('')
+    :'<div style="color:#443322">No broadcasts this session.</div>';
+}
+
+// ══════════════════════════════════════════
+//  SERVER
+// ══════════════════════════════════════════
+function saveIdentity(){
+  const name=document.getElementById('srv-name')?.value?.trim()||'Capital RNG';
+  const motd=document.getElementById('srv-motd')?.value?.trim()||'';
+  if(motd) api('POST','/api/admin/settings',{ globalMult:_globalMult, xpRate:_xpRate, broadcastMsg:`📢 ${motd}` }).catch(()=>{});
+  toast(`✅ Identity saved: ${name}`);
+}
+
+function setLock(locked){
+  const statusEl=document.getElementById('lock-status');
+  if(statusEl) statusEl.textContent=locked?'🔒 LOCKED — No new signups':'🔓 OPEN — Signups allowed';
+  api('POST','/api/admin/settings',{ globalMult:_globalMult, xpRate:_xpRate, broadcastMsg:locked?'🔒 Server is currently locked to new registrations.':'' }).catch(()=>{});
+  toast(locked?'🔒 Signup lock ON':'🔓 Signup lock OFF');
+}
+
+async function changePassphrase(){
+  const n=document.getElementById('new-passphrase')?.value;
+  const c=document.getElementById('confirm-passphrase')?.value;
+  if(!n||n.length<6){ toast('Passphrase must be 6+ characters',false); return; }
+  if(n!==c){ toast('Passphrases do not match',false); return; }
+  const h=await hashPhrase(n);
+  localStorage.setItem(PASSPHRASE_KEY, h);
+  document.getElementById('new-passphrase').value='';
+  document.getElementById('confirm-passphrase').value='';
+  toast('🔑 Passphrase updated! Remember to note it down.');
+}
+
+// ══════════════════════════════════════════
+//  DANGER
+// ══════════════════════════════════════════
+async function dangerWipeScores(){
+  if(!confirm('Set ALL player scores to 0?')) return;
+  if(!confirm('FINAL: Cannot be undone!')) return;
+  let c=0;
+  for(const u of _users){ try{ await api('PATCH',`/api/admin/user/${u.id}`,{score:0}); c++; }catch{} }
+  toast(`💣 Wiped scores for ${c} players`);
+  await loadPlayers();
+}
+
+async function dangerResetAll(){
+  if(!confirm('Reset ALL progress for EVERY player?')) return;
+  if(!confirm('FINAL: Scores, luck, upgrades, achievements all gone!')) return;
+  let c=0;
+  for(const u of _users){ try{ await api('POST',`/api/admin/reset/${u.id}`); c++; }catch{} }
+  toast(`🔄 Reset ${c} player accounts`);
+  await loadPlayers();
+}
+
+async function dangerDeleteNonAdmins(){
+  if(!confirm('DELETE every non-admin, non-owner account? PERMANENT.')) return;
+  if(!confirm('ABSOLUTE FINAL: All regular players gone forever!')) return;
+  const targets=_users.filter(u=>!u.is_admin&&!u.is_owner&&!u.is_owner2);
+  let c=0;
+  for(const u of targets){ try{ await api('DELETE',`/api/admin/user/${u.id}`); c++; }catch{} }
+  toast(`☢ Deleted ${c} players`);
+  await loadPlayers();
+}
+
+async function dangerNukeAll(){
+  if(!confirm('DELETE EVERY ACCOUNT except root admin? Database will be empty.')) return;
+  if(!confirm('THIS IS IRREVERSIBLE. ALL DATA GONE FOREVER. Absolutely sure?')) return;
+  const targets=_users.filter(u=>u.id!=='uid_admin_root'&&u.id!==_currentUser?.id);
+  let c=0;
+  for(const u of targets){ try{ await api('DELETE',`/api/admin/user/${u.id}`); c++; }catch{} }
+  toast(`💀 NUKED ${c} accounts. Database empty.`);
+  await loadPlayers();
+}
+</script>
+</body>
+</html>
