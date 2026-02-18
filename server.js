@@ -576,3 +576,23 @@ initDB().then(() => {
   console.error('❌ DB init failed:', err);
   process.exit(1);
 });
+function requireOwner(req, res, next) {
+  requireAuth(req, res, () => {
+    if (!req.user.isOwner && !req.user.isOwner2) {
+      return res.status(403).json({ error: 'Owner only' });
+    }
+    next();
+  });
+}
+
+app.post('/api/owner/verify-passphrase', requireOwner, (req, res) => {
+  const { passphrase } = req.body || {};
+  if (!passphrase) return res.status(400).json({ error: 'Missing passphrase' });
+
+  // Compare to env var (never sent to client)
+  if (passphrase !== process.env.OWNER_PANEL_PASSPHRASE) {
+    return res.status(401).json({ error: 'Wrong passphrase' });
+  }
+
+  res.json({ ok: true });
+});
