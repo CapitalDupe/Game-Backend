@@ -498,13 +498,13 @@ app.post('/api/admin/settings', requireAdmin, (req, res) => {
 //  HEALTH CHECK
 // ═══════════════════════════════════════
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/', (req, res) => res.json({ name: 'RNG Incremental API', version: '2.0.0' }));
+app.get('/', (req, res) => res.json({ name: 'Capital RNG API', version: '2.0.0' }));
 
 // ═══════════════════════════════════════
 //  START
 // ═══════════════════════════════════════
 initDB().then(() => {
-  app.listen(PORT, () => console.log(`🚀 RNG API running on port ${PORT}`));
+  app.listen(PORT, () => console.log(`🚀 Capital RNG API running on port ${PORT}`));
 }).catch(err => {
   console.error('❌ DB init failed:', err);
   process.exit(1);
