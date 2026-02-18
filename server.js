@@ -141,6 +141,36 @@ app.use(express.json());
 // ═══════════════════════════════════════
 //  AUTH MIDDLEWARE
 // ═══════════════════════════════════════
+// ─── Rate limiting for admin/auth probing ───
+const _adminFailures = new Map(); // ip → { count, ts }
+const ADMIN_MAX_FAILS  = 10;
+const ADMIN_LOCKOUT_MS = 15 * 60 * 1000; // 15 min
+
+function trackAdminFail(ip) {
+  const f = _adminFailures.get(ip);
+  if (!f || Date.now() - f.ts > ADMIN_LOCKOUT_MS) {
+    _adminFailures.set(ip, { count: 1, ts: Date.now() });
+  } else {
+    f.count++;
+  }
+}
+
+function isAdminLocked(ip) {
+  const f = _adminFailures.get(ip);
+  return f && f.count >= ADMIN_MAX_FAILS && Date.now() - f.ts < ADMIN_LOCKOUT_MS;
+}
+
+// ─── Audit log (last 500 entries in memory, logged to console) ───
+const _auditLog = [];
+function audit(req, action, detail = '') {
+  const ip      = getClientIP(req);
+  const user    = req.user ? `${req.user.username}(${req.user.id})` : 'anon';
+  const entry   = `[${new Date().toISOString()}] ${action} | ${user} | IP:${ip} ${detail}`;
+  _auditLog.unshift(entry);
+  if (_auditLog.length > 500) _auditLog.pop();
+  console.log('📋 AUDIT:', entry);
+}
+
 function requireAuth(req, res, next) {
   const auth = req.headers.authorization;
   if (!auth?.startsWith("Bearer ")) return res.status(401).json({ error: "No token" });
@@ -154,8 +184,14 @@ function requireAuth(req, res, next) {
 
 // Admins AND owners can use admin routes
 function requireAdmin(req, res, next) {
+  const ip = getClientIP(req);
+  if (isAdminLocked(ip)) {
+    return res.status(429).json({ error: "Too many failed attempts. Try again later." });
+  }
   requireAuth(req, res, () => {
     if (!req.user.isAdmin && !req.user.isOwner && !req.user.isOwner2) {
+      trackAdminFail(ip);
+      audit(req, 'ADMIN_DENIED', req.path);
       return res.status(403).json({ error: "Admin only" });
     }
     next();
@@ -164,13 +200,25 @@ function requireAdmin(req, res, next) {
 
 // Owners only
 function requireOwner(req, res, next) {
+  const ip = getClientIP(req);
+  if (isAdminLocked(ip)) {
+    return res.status(429).json({ error: "Too many failed attempts. Try again later." });
+  }
   requireAuth(req, res, () => {
     if (!req.user.isOwner && !req.user.isOwner2) {
+      trackAdminFail(ip);
+      audit(req, 'OWNER_DENIED', req.path);
       return res.status(403).json({ error: "Owner only" });
     }
     next();
   });
 }
+
+// Owner-only audit log endpoint
+app.get("/api/owner/audit", requireOwner, (req, res) => {
+  audit(req, 'AUDIT_VIEW');
+  res.json({ log: _auditLog });
+});
 
 // ═══════════════════════════════════════
 //  HELPERS
