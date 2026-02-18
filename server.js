@@ -372,19 +372,43 @@ app.patch('/api/admin/user/:id', requireAdmin, async (req, res) => {
       await pool.query('UPDATE users SET password = $1 WHERE id = $2', [hash, id]);
     }
 
-    await pool.query(`
-      UPDATE game_state SET
-        score=$2, luck_level=$3, prestige_level=$4, total_rolls=$5,
-        mult_level=$6, cd_level=$7, auto_level=$8, vault_level=$9,
-        xp_level=$10, crit_level=$11, voidupg_level=$12, echo_level=$13,
-        updated_at=NOW()
-      WHERE user_id=$1
-    `, [
-      id,
-      s.score ?? 0, s.luckLevel ?? 1, s.prestigeLevel ?? 0, s.totalRolls ?? 0,
-      s.multLevel ?? 0, s.cdLevel ?? 0, s.autoLevel ?? 0, s.vaultLevel ?? 0,
-      s.xpLevel ?? 0, s.critLevel ?? 0, s.voidupgLevel ?? 0, s.echoLevel ?? 0,
-    ]);
+    // Build dynamic UPDATE — only touch fields that were sent
+    const map = {
+      score:         'score',
+      luckLevel:     'luck_level',
+      prestigeLevel: 'prestige_level',
+      totalRolls:    'total_rolls',
+      voidCount:     'void_count',
+      omegaCount:    'omega_count',
+      multLevel:     'mult_level',
+      cdLevel:       'cd_level',
+      autoLevel:     'auto_level',
+      vaultLevel:    'vault_level',
+      xpLevel:       'xp_level',
+      critLevel:     'crit_level',
+      voidupgLevel:  'voidupg_level',
+      echoLevel:     'echo_level',
+      soulLevel:     'soul_level',
+      ascLevel:      'asc_level',
+      timeLevel:     'time_level',
+      forgeLevel:    'forge_level',
+    };
+    const fields = [];
+    const vals   = [id];
+    let   idx    = 2;
+    for (const [jsKey, dbCol] of Object.entries(map)) {
+      if (s[jsKey] !== undefined) {
+        fields.push(`${dbCol}=$${idx++}`);
+        vals.push(s[jsKey]);
+      }
+    }
+    if (fields.length > 0) {
+      fields.push('updated_at=NOW()');
+      await pool.query(
+        `UPDATE game_state SET ${fields.join(', ')} WHERE user_id=$1`,
+        vals
+      );
+    }
 
     res.json({ ok: true });
   } catch (err) {
