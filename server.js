@@ -524,11 +524,14 @@ app.post("/api/game/save", requireAuth, async (req, res) => {
     const cur = await pool.query("SELECT * FROM game_state WHERE user_id = $1", [req.user.id]);
     const curState = cur.rows[0] || {};
 
-    // Scores can grow very large legitimately, but cap at a sane ceiling
-    // and never allow a single save to jump by more than a reasonable amount
-    const MAX_SCORE = 1e18; // 1 quintillion — effectively unlimited for real play
-    const curScore  = parseFloat(curState.score) || 0;
-    const newScore  = clamp(s.score, 0, MAX_SCORE);
+    // Score: can grow large but can't jump impossibly fast
+    // Max allowed per save: current score * 1000 + 1,000,000 (generous for prestige jumps)
+    // This still allows massive legitimate scores but blocks editing 100 → 1e17
+    const MAX_SCORE      = 1e18;
+    const curScore       = parseFloat(curState.score) || 0;
+    const submittedScore = clamp(s.score, 0, MAX_SCORE);
+    const maxAllowed     = Math.max(curScore * 1000 + 1_000_000, 1_000_000);
+    const newScore       = Math.min(submittedScore, maxAllowed);
 
     // Luck level: 1–100, can only go up (never allow reducing except via admin)
     const curLuck  = parseInt(curState.luck_level) || 1;
