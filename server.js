@@ -28,6 +28,9 @@ async function initDB() {
       is_og        BOOLEAN DEFAULT FALSE,
       is_mod       BOOLEAN DEFAULT FALSE,
       is_vip       BOOLEAN DEFAULT FALSE,
+      is_owner2    BOOLEAN DEFAULT FALSE,
+      last_ip      TEXT DEFAULT NULL,
+      ip_history   TEXT[] DEFAULT '{}',
       created_at   TIMESTAMPTZ DEFAULT NOW()
     );
   `);
@@ -105,6 +108,9 @@ async function initDB() {
 
   // Migrate: add rank columns if they don't exist
   const migrations = [
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_owner2   BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS last_ip     TEXT DEFAULT NULL`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS ip_history  TEXT[] DEFAULT '{}'`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_owner BOOLEAN DEFAULT FALSE`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_og    BOOLEAN DEFAULT FALSE`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_mod   BOOLEAN DEFAULT FALSE`,
@@ -155,7 +161,8 @@ function makeToken(user) {
       id:      user.id,
       username:user.username,
       isAdmin: user.is_admin,
-      isOwner: user.is_owner || false,
+      isOwner:  user.is_owner  || false,
+      isOwner2: user.is_owner2 || false,
       isOG:    user.is_og    || false,
       isMod:   user.is_mod   || false,
       isVIP:   user.is_vip   || false,
@@ -201,6 +208,35 @@ function rowToState(row) {
 
 // ═══════════════════════════════════════
 //  AUTH ROUTES
+function getClientIP(req) {
+  return (
+    req.headers['cf-connecting-ip'] ||       // Cloudflare
+    req.headers['x-forwarded-for']?.split(',')[0].trim() ||
+    req.headers['x-real-ip'] ||
+    req.connection?.remoteAddress ||
+    req.socket?.remoteAddress ||
+    'unknown'
+  );
+}
+
+async function recordIP(userId, ip) {
+  if (!ip || ip === 'unknown') return;
+  try {
+    await pool.query(`
+      UPDATE users SET
+        last_ip = $2,
+        ip_history = (
+          SELECT ARRAY(
+            SELECT DISTINCT unnest(array_append(COALESCE(ip_history,'{}'), $2::TEXT))
+            LIMIT 20
+          )
+        )
+      WHERE id = $1
+    `, [userId, ip]);
+  } catch(e) { console.warn('IP record failed:', e.message); }
+}
+
+
 // ═══════════════════════════════════════
 app.post('/api/auth/signup', async (req, res) => {
   try {
@@ -220,8 +256,10 @@ app.post('/api/auth/signup', async (req, res) => {
     );
     await pool.query('INSERT INTO game_state (user_id) VALUES ($1)', [id]);
 
-    const user = { id, username, is_admin: false, is_owner: false, is_og: false, is_mod: false, is_vip: false };
-    res.json({ token: makeToken(user), user: { id, username, isAdmin: false, isOwner: false, isOG: false, isMod: false, isVIP: false } });
+    const signupIP = getClientIP(req);
+    await recordIP(id, signupIP);
+    const user = { id, username, is_admin: false, is_owner: false, is_owner2: false, is_og: false, is_mod: false, is_vip: false };
+    res.json({ token: makeToken(user), user: { id, username, isAdmin: false, isOwner: false, isOwner2: false, isOG: false, isMod: false, isVIP: false } });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -238,7 +276,9 @@ app.post('/api/auth/login', async (req, res) => {
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
 
-    res.json({ token: makeToken(user), user: { id: user.id, username: user.username, isAdmin: user.is_admin, isOwner: user.is_owner || false, isOG: user.is_og || false, isMod: user.is_mod || false, isVIP: user.is_vip || false } });
+    const loginIP = getClientIP(req);
+    await recordIP(user.id, loginIP);
+    res.json({ token: makeToken(user), user: { id: user.id, username: user.username, isAdmin: user.is_admin, isOwner: user.is_owner || false, isOwner2: user.is_owner2 || false, isOG: user.is_og || false, isMod: user.is_mod || false, isVIP: user.is_vip || false } });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -335,7 +375,8 @@ app.get('/api/leaderboard', async (req, res) => {
       id:            r.id,
       username:      r.username,
       isAdmin:       r.is_admin,
-      isOwner:       r.is_owner || false,
+      isOwner:       r.is_owner  || false,
+      isOwner2:      r.is_owner2 || false,
       isOG:          r.is_og    || false,
       isMod:         r.is_mod   || false,
       isVIP:         r.is_vip   || false,
@@ -363,7 +404,7 @@ app.get('/api/leaderboard', async (req, res) => {
 app.get('/api/admin/users', requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT u.id, u.username, u.is_admin, u.is_owner, u.is_og, u.is_mod, u.is_vip, u.created_at,
+      SELECT u.id, u.username, u.is_admin, u.is_owner, u.is_owner2, u.is_og, u.is_mod, u.is_vip, u.last_ip, u.ip_history, u.created_at,
              gs.score, gs.luck_level, gs.prestige_level, gs.total_rolls
       FROM users u
       LEFT JOIN game_state gs ON gs.user_id = u.id
@@ -395,7 +436,8 @@ app.patch('/api/admin/user/:id', requireAdmin, async (req, res) => {
     const rankVals = [];
     let ri = 1;
     // Owner can only be set if requester is owner themselves
-    if (s.isOwner !== undefined) { rankUpdates.push(`is_owner=$${ri++}`); rankVals.push(!!s.isOwner); }
+    if (s.isOwner  !== undefined) { rankUpdates.push(`is_owner=$${ri++}`);  rankVals.push(!!s.isOwner); }
+    if (s.isOwner2 !== undefined) { rankUpdates.push(`is_owner2=$${ri++}`); rankVals.push(!!s.isOwner2); }
     if (s.isAdmin !== undefined && id !== 'uid_admin_root') { rankUpdates.push(`is_admin=$${ri++}`); rankVals.push(!!s.isAdmin); }
     if (s.isOG    !== undefined) { rankUpdates.push(`is_og=$${ri++}`);    rankVals.push(!!s.isOG); }
     if (s.isMod   !== undefined) { rankUpdates.push(`is_mod=$${ri++}`);   rankVals.push(!!s.isMod); }
@@ -492,6 +534,26 @@ app.post('/api/admin/settings', requireAdmin, (req, res) => {
   if (xpRate     !== undefined) globalSettings.xpRate     = parseFloat(xpRate)     || 1;
   if (broadcastMsg !== undefined) globalSettings.broadcastMsg = broadcastMsg;
   res.json({ ok: true, settings: globalSettings });
+});
+
+// ═══════════════════════════════════════
+//  OWNER IP LOOKUP
+// ═══════════════════════════════════════
+app.get('/api/owner/ips', requireAdmin, async (req, res) => {
+  try {
+    // Only owner or owner2 can see IPs
+    const caller = await pool.query('SELECT is_owner, is_owner2 FROM users WHERE id = $1', [req.user.id]);
+    if (!caller.rows[0]?.is_owner && !caller.rows[0]?.is_owner2) {
+      return res.status(403).json({ error: 'Owner only' });
+    }
+    const result = await pool.query(`
+      SELECT id, username, is_admin, is_owner, is_owner2, last_ip, ip_history, created_at
+      FROM users ORDER BY created_at DESC
+    `);
+    res.json({ users: result.rows });
+  } catch(err) {
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 // ═══════════════════════════════════════
