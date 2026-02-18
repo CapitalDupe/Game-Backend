@@ -116,13 +116,16 @@ async function initDB() {
 
   // Migrations (safe)
   const migrations = [
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_owner2   BOOLEAN DEFAULT FALSE`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS last_ip     TEXT DEFAULT NULL`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS ip_history  TEXT[] DEFAULT '{}'`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_owner    BOOLEAN DEFAULT FALSE`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_og       BOOLEAN DEFAULT FALSE`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_mod      BOOLEAN DEFAULT FALSE`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_vip      BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_owner2         BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS last_ip           TEXT DEFAULT NULL`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS ip_history        TEXT[] DEFAULT '{}'`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_owner          BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_og             BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_mod            BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_vip            BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS owner_token       TEXT DEFAULT NULL`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS owner_token_exp   TIMESTAMPTZ DEFAULT NULL`,
+  ];
   ];
   for (const sql of migrations) {
     try {
@@ -279,22 +282,83 @@ async function recordIP(userId, ip) {
 }
 
 // ═══════════════════════════════════════
-//  OWNER PASSPHRASE VERIFY (BACKEND)
-//  - used by owner.html so passphrase isn't stored in JS
+//  OWNER PASSPHRASE VERIFY
 // ═══════════════════════════════════════
-app.post("/api/owner/verify-passphrase", requireOwner, (req, res) => {
+const _ppFailures = new Map();
+const PP_MAX_ATTEMPTS = 5;
+const PP_LOCKOUT_MS   = 15 * 60 * 1000;
+
+app.post("/api/owner/verify-passphrase", (req, res) => {
+  const ip = (
+    req.headers["cf-connecting-ip"] ||
+    req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
+    req.socket?.remoteAddress || "unknown"
+  );
+  const fail = _ppFailures.get(ip);
+  if (fail && fail.count >= PP_MAX_ATTEMPTS && Date.now() - fail.ts < PP_LOCKOUT_MS) {
+    const mins = Math.ceil((PP_LOCKOUT_MS - (Date.now() - fail.ts)) / 60000);
+    return res.status(429).json({ error: `Too many attempts. Try again in ${mins} min.` });
+  }
   const { passphrase } = req.body || {};
   if (!passphrase) return res.status(400).json({ error: "Missing passphrase" });
-
-  if (!OWNER_PANEL_PASSPHRASE) {
-    return res.status(500).json({ error: "OWNER_PANEL_PASSPHRASE not set on server" });
-  }
-
+  if (!OWNER_PANEL_PASSPHRASE) return res.status(500).json({ error: "OWNER_PANEL_PASSPHRASE not set on server" });
   if (passphrase !== OWNER_PANEL_PASSPHRASE) {
-    return res.status(401).json({ error: "Wrong passphrase" });
+    if (!fail || Date.now() - fail.ts > PP_LOCKOUT_MS) _ppFailures.set(ip, { count: 1, ts: Date.now() });
+    else fail.count++;
+    const remaining = PP_MAX_ATTEMPTS - (_ppFailures.get(ip)?.count || 0);
+    return res.status(401).json({ error: `Wrong passphrase. ${remaining} attempt(s) left.` });
   }
-
+  _ppFailures.delete(ip);
   return res.json({ ok: true });
+});
+
+// ═══════════════════════════════════════
+//  OWNER SESSION TOKEN (48h per-account)
+// ═══════════════════════════════════════
+
+// After normal login: generate a 48h owner token, store in DB
+app.post("/api/owner/generate-token", requireOwner, async (req, res) => {
+  try {
+    const token = require("crypto").randomBytes(32).toString("hex");
+    const exp   = new Date(Date.now() + 48 * 60 * 60 * 1000);
+    await pool.query(
+      `UPDATE users SET owner_token=$1, owner_token_exp=$2 WHERE id=$3`,
+      [token, exp, req.user.id]
+    );
+    return res.json({ token, expires: exp.toISOString() });
+  } catch (err) { console.error(err); return res.status(500).json({ error: "Server error" }); }
+});
+
+// Auto-login: exchange owner token → full JWT (no password needed)
+app.post("/api/owner/token-login", async (req, res) => {
+  try {
+    const { token } = req.body || {};
+    if (!token) return res.status(400).json({ error: "Missing token" });
+
+    const result = await pool.query(
+      `SELECT * FROM users WHERE owner_token=$1`, [token]
+    );
+    if (!result.rows.length) return res.status(401).json({ error: "Invalid token" });
+
+    const user = result.rows[0];
+    if (!user.is_owner && !user.is_owner2) return res.status(403).json({ error: "Not an owner account" });
+    if (new Date(user.owner_token_exp) < new Date()) {
+      return res.status(401).json({ error: "Token expired" });
+    }
+
+    // Issue a fresh JWT
+    return res.json({
+      token: makeToken(user),
+      user: {
+        id: user.id,
+        username: user.username,
+        isAdmin: user.is_admin,
+        isOwner: user.is_owner || false,
+        isOwner2: user.is_owner2 || false,
+      },
+      expires: user.owner_token_exp,
+    });
+  } catch (err) { console.error(err); return res.status(500).json({ error: "Server error" }); }
 });
 
 // ═══════════════════════════════════════
