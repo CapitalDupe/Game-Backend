@@ -1,4 +1,5 @@
 // server.js
+const path = require("path");
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -148,7 +149,13 @@ app.use(
 
 app.use(express.json());
 
-// Pure API server — all frontend files live in the frontend repo.
+// Serve /public (so /owner/index.html + assets work)
+app.use(express.static(path.join(__dirname, "public")));
+
+// Serve Owner Panel at /owner
+app.get("/owner", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "owner", "index.html"));
+});
 
 // ═══════════════════════════════════════
 //  AUTH MIDDLEWARE
@@ -273,18 +280,46 @@ async function recordIP(userId, ip) {
 //  OWNER PASSPHRASE VERIFY (BACKEND)
 //  - used by owner.html so passphrase isn't stored in JS
 // ═══════════════════════════════════════
-app.post("/api/owner/verify-passphrase", requireOwner, (req, res) => {
+// Brute-force protection: track failed attempts per IP
+const _ppFailures = new Map();
+const PP_MAX_ATTEMPTS = 5;
+const PP_LOCKOUT_MS   = 15 * 60 * 1000; // 15 minutes
+
+app.post("/api/owner/verify-passphrase", (req, res) => {
+  const ip = (
+    req.headers["cf-connecting-ip"] ||
+    req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
+    req.socket?.remoteAddress ||
+    "unknown"
+  );
+
+  // Check lockout
+  const fail = _ppFailures.get(ip);
+  if (fail && fail.count >= PP_MAX_ATTEMPTS && Date.now() - fail.ts < PP_LOCKOUT_MS) {
+    const mins = Math.ceil((PP_LOCKOUT_MS - (Date.now() - fail.ts)) / 60000);
+    return res.status(429).json({ error: `Too many attempts. Try again in ${mins} min.` });
+  }
+
   const { passphrase } = req.body || {};
   if (!passphrase) return res.status(400).json({ error: "Missing passphrase" });
 
   if (!OWNER_PANEL_PASSPHRASE) {
-    return res.status(500).json({ error: "OWNER_PANEL_PASSPHRASE not set on server" });
+    return res.status(500).json({ error: "OWNER_PANEL_PASSPHRASE env var not set on server" });
   }
 
   if (passphrase !== OWNER_PANEL_PASSPHRASE) {
-    return res.status(401).json({ error: "Wrong passphrase" });
+    // Record failure
+    if (!fail || Date.now() - fail.ts > PP_LOCKOUT_MS) {
+      _ppFailures.set(ip, { count: 1, ts: Date.now() });
+    } else {
+      fail.count++;
+    }
+    const remaining = PP_MAX_ATTEMPTS - (_ppFailures.get(ip)?.count || 0);
+    return res.status(401).json({ error: `Wrong passphrase. ${remaining} attempt(s) left.` });
   }
 
+  // Success — clear failures
+  _ppFailures.delete(ip);
   return res.json({ ok: true });
 });
 
@@ -674,8 +709,12 @@ app.post("/api/admin/settings", requireAdmin, (req, res) => {
 });
 
 // Owner IP lookup (owner/owner2 only)
-app.get("/api/owner/ips", requireOwner, async (req, res) => {
+app.get("/api/owner/ips", requireAdmin, async (req, res) => {
   try {
+    const caller = await pool.query("SELECT is_owner, is_owner2 FROM users WHERE id = $1", [req.user.id]);
+    if (!caller.rows[0]?.is_owner && !caller.rows[0]?.is_owner2) {
+      return res.status(403).json({ error: "Owner only" });
+    }
     const result = await pool.query(`
       SELECT id, username, is_admin, is_owner, is_owner2, last_ip, ip_history, created_at
       FROM users ORDER BY created_at DESC
