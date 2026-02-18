@@ -483,10 +483,15 @@ app.patch('/api/admin/user/:id', requireAdmin, async (req, res) => {
     }
     if (fields.length > 0) {
       fields.push('updated_at=NOW()');
-      await pool.query(
+      // Upsert: create the row if it doesn't exist, then update it
+      await pool.query(`INSERT INTO game_state (user_id) VALUES ($1) ON CONFLICT DO NOTHING`, [id]);
+      const rowsAffected = await pool.query(
         `UPDATE game_state SET ${fields.join(', ')} WHERE user_id=$1`,
         vals
       );
+      if (rowsAffected.rowCount === 0) {
+        console.warn(`PATCH admin/user: no game_state row for ${id} even after upsert`);
+      }
     }
 
     res.json({ ok: true });
