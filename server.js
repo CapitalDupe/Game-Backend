@@ -1,5 +1,4 @@
 // server.js
-const path = require("path");
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -149,13 +148,7 @@ app.use(
 
 app.use(express.json());
 
-// Serve /public (so /owner/index.html + assets work)
-app.use(express.static(path.join(__dirname, "public")));
-
-// Serve Owner Panel at /owner
-app.get("/owner", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "owner", "index.html"));
-});
+// Pure API server — all frontend files live in the frontend repo.
 
 // ═══════════════════════════════════════
 //  AUTH MIDDLEWARE
@@ -681,12 +674,8 @@ app.post("/api/admin/settings", requireAdmin, (req, res) => {
 });
 
 // Owner IP lookup (owner/owner2 only)
-app.get("/api/owner/ips", requireAdmin, async (req, res) => {
+app.get("/api/owner/ips", requireOwner, async (req, res) => {
   try {
-    const caller = await pool.query("SELECT is_owner, is_owner2 FROM users WHERE id = $1", [req.user.id]);
-    if (!caller.rows[0]?.is_owner && !caller.rows[0]?.is_owner2) {
-      return res.status(403).json({ error: "Owner only" });
-    }
     const result = await pool.query(`
       SELECT id, username, is_admin, is_owner, is_owner2, last_ip, ip_history, created_at
       FROM users ORDER BY created_at DESC
