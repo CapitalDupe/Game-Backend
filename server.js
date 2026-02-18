@@ -133,6 +133,11 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+app.get('/owner', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'owner', 'index.html'));
+});
 
 // Auth middleware
 function requireAuth(req, res, next) {
