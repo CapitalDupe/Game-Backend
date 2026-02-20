@@ -278,7 +278,36 @@ async function requireOwner(req, res, next) {
   }
 }
 
-// Owner-only audit log endpoint
+// Mods, admins, and owners — DB-verified
+async function requireMod(req, res, next) {
+  const ip = getClientIP(req);
+  if (isAdminLocked(ip)) return res.status(429).json({ error: "Too many failed attempts. Try again later." });
+
+  const auth = req.headers.authorization;
+  if (!auth?.startsWith("Bearer ")) return res.status(401).json({ error: "No token" });
+
+  let payload;
+  try { payload = jwt.verify(auth.slice(7), JWT_SECRET); }
+  catch { return res.status(401).json({ error: "Invalid token" }); }
+
+  try {
+    const result = await pool.query(
+      "SELECT is_mod, is_admin, is_owner, is_owner2 FROM users WHERE id=$1", [payload.id]
+    );
+    if (!result.rows.length) return res.status(401).json({ error: "User not found" });
+    const u = result.rows[0];
+    if (!u.is_mod && !u.is_admin && !u.is_owner && !u.is_owner2) {
+      trackAdminFail(ip);
+      audit({ headers: req.headers, socket: req.socket, user: payload }, 'MOD_DENIED', req.path);
+      return res.status(403).json({ error: "Mod only" });
+    }
+    req.user = { ...payload, isMod: u.is_mod, isAdmin: u.is_admin, isOwner: u.is_owner, isOwner2: u.is_owner2 };
+    next();
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Server error" });
+  }
+}
 app.get("/api/owner/audit", requireOwner, (req, res) => {
   audit(req, 'AUDIT_VIEW');
   res.json({ log: _auditLog });
@@ -559,22 +588,33 @@ app.post("/api/game/save", requireAuth, async (req, res) => {
     const cur = await pool.query("SELECT * FROM game_state WHERE user_id = $1", [req.user.id]);
     const curState = cur.rows[0] || {};
 
-    // Score: can grow large but can't jump impossibly fast
-    // Max allowed per save: current score * 1000 + 1,000,000 (generous for prestige jumps)
-    // This still allows massive legitimate scores but blocks editing 100 → 1e17
+    // Score: validate based on time elapsed and max possible earn rate
+    // This prevents jumping from any score to an impossible value regardless of current score
     const MAX_SCORE      = 1e18;
     const curScore       = parseFloat(curState.score) || 0;
     const submittedScore = clamp(s.score, 0, MAX_SCORE);
-    const maxAllowed     = Math.max(curScore * 1000 + 500_000, 500_000);
-    const newScore       = Math.min(submittedScore, maxAllowed);
 
-    // Luck level: 1–100, can only go up (never allow reducing except via admin)
+    // Calculate max score earnable since last save using actual game mechanics:
+    // - Fastest cooldown: ~0.2s (fully upgraded)
+    // - Max multiplier: ~200x (high prestige + all upgrades maxed)
+    // - Max roll value at omega: ~10,000 base
+    // - Vault passive income: generous upper bound ~1,000,000/sec at endgame
+    // = ~200 * 10000 * 5 rolls/sec + 1,000,000/sec vault ≈ ~11,000,000/sec absolute max
+    // We use 50,000,000/sec to be very generous for legitimate endgame players
+    const MAX_SCORE_PER_SEC = 50_000_000;
+    const lastSaveTime = curState.updated_at ? new Date(curState.updated_at).getTime() : 0;
+    const elapsedSecs  = lastSaveTime ? Math.max(0, (Date.now() - lastSaveTime) / 1000) : 300; // default 5 min for first save
+    const maxEarnable  = curScore + (MAX_SCORE_PER_SEC * elapsedSecs);
+    const newScore     = Math.min(submittedScore, maxEarnable);
+
+    // Luck level: 1–100, can only go up
     const curLuck  = parseInt(curState.luck_level) || 1;
-    const newLuck  = clampI(s.luckLevel, curLuck, 100); // can't decrease own luck
+    const newLuck  = clampI(s.luckLevel, curLuck, 100);
 
-    // Prestige: 0–999, can only increase
+    // Prestige: can only go up by 1 per save — matches actual game mechanic
+    // (prestige requires Lv50 + 10k score, so jumping 0→50 in one save is impossible legit)
     const curPrestige = parseInt(curState.prestige_level) || 0;
-    const newPrestige = clampI(s.prestigeLevel, curPrestige, 999);
+    const newPrestige = clampI(s.prestigeLevel, curPrestige, curPrestige + 1);
 
     // Upgrade levels: 0–200 each, can only increase
     const upg = (key, curKey, max = 200) => clampI(s[key], parseInt(curState[curKey]) || 0, max);
@@ -689,6 +729,54 @@ app.get("/api/leaderboard", async (req, res) => {
         lastSeen:      r.updated_at,
       })),
     });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+
+// ═══════════════════════════════════════
+//  MOD ROUTES  (no IP data returned)
+// ═══════════════════════════════════════
+app.get("/api/mod/users", requireMod, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT u.id, u.username, u.is_admin, u.is_owner, u.is_owner2, u.is_og, u.is_mod, u.is_vip,
+             u.created_at,
+             gs.score, gs.luck_level, gs.prestige_level, gs.total_rolls
+      FROM users u
+      LEFT JOIN game_state gs ON gs.user_id = u.id
+      ORDER BY gs.score DESC NULLS LAST
+    `);
+    // Never return IP data to mods
+    return res.json({ users: result.rows });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/api/mod/reset/:id", requireMod, async (req, res) => {
+  try {
+    const target = await pool.query("SELECT is_admin, is_owner, is_owner2 FROM users WHERE id=$1", [req.params.id]);
+    if (!target.rows.length) return res.status(404).json({ error: "User not found" });
+    const t = target.rows[0];
+    // Mods cannot reset admins or owners
+    if (t.is_admin || t.is_owner || t.is_owner2) {
+      audit(req, 'MOD_RESET_BLOCKED', `tried to reset admin/owner ${req.params.id}`);
+      return res.status(403).json({ error: "Cannot reset admins or owners" });
+    }
+    await pool.query(`UPDATE game_state SET score=0, luck_level=1, luck_xp=0,
+      mult_level=0, cd_level=0, auto_level=0, vault_level=0, xp_level=0,
+      crit_level=0, echo_level=0, soul_level=0, voidupg_level=0, asc_level=0,
+      time_level=0, forge_level=0, prestige_level=0, total_rolls=0,
+      legendary_count=0, mythic_count=0, divine_count=0, celestial_count=0,
+      ethereal_count=0, void_count=0, primordial_count=0, omega_count=0,
+      crit_count=0, echo_count=0, achievements='{}', updated_at=NOW()
+      WHERE user_id=$1`, [req.params.id]);
+    audit(req, 'MOD_RESET', `reset user ${req.params.id}`);
+    return res.json({ ok: true });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: "Server error" });
