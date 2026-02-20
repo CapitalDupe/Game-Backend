@@ -118,7 +118,6 @@ async function initDB() {
     );
     console.log("✅ Root admin account created");
   } else {
-    // Account already exists — update the password in case env var changed
     const hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
     await pool.query("UPDATE users SET password=$1 WHERE id=$2", [hash, adminId]);
     console.log("✅ Root admin password synced from env");
@@ -158,11 +157,8 @@ const ALLOWED_ORIGINS = new Set([
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
-    // Allow exact matches
     if (ALLOWED_ORIGINS.has(origin)) return callback(null, true);
-    // Allow Cloudflare Pages preview URLs (*.game-3v1.pages.dev)
     if (/^https:\/\/[a-z0-9-]+\.game-3v1\.pages\.dev$/.test(origin)) return callback(null, true);
     callback(new Error(`CORS blocked: ${origin}`));
   },
@@ -170,16 +166,12 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Pure API — no static files served here.
-// All frontend files live in the frontend repo.
-
 // ═══════════════════════════════════════
 //  AUTH MIDDLEWARE
 // ═══════════════════════════════════════
-// ─── Rate limiting for admin/auth probing ───
-const _adminFailures = new Map(); // ip → { count, ts }
+const _adminFailures = new Map();
 const ADMIN_MAX_FAILS  = 10;
-const ADMIN_LOCKOUT_MS = 15 * 60 * 1000; // 15 min
+const ADMIN_LOCKOUT_MS = 15 * 60 * 1000;
 
 function trackAdminFail(ip) {
   const f = _adminFailures.get(ip);
@@ -195,12 +187,11 @@ function isAdminLocked(ip) {
   return f && f.count >= ADMIN_MAX_FAILS && Date.now() - f.ts < ADMIN_LOCKOUT_MS;
 }
 
-// ─── Audit log (last 500 entries in memory, logged to console) ───
 const _auditLog = [];
 function audit(req, action, detail = '') {
-  const ip      = getClientIP(req);
-  const user    = req.user ? `${req.user.username}(${req.user.id})` : 'anon';
-  const entry   = `[${new Date().toISOString()}] ${action} | ${user} | IP:${ip} ${detail}`;
+  const ip    = getClientIP(req);
+  const user  = req.user ? `${req.user.username}(${req.user.id})` : 'anon';
+  const entry = `[${new Date().toISOString()}] ${action} | ${user} | IP:${ip} ${detail}`;
   _auditLog.unshift(entry);
   if (_auditLog.length > 500) _auditLog.pop();
   console.log('📋 AUDIT:', entry);
@@ -213,7 +204,6 @@ async function requireAuth(req, res, next) {
   try { payload = jwt.verify(auth.slice(7), JWT_SECRET); }
   catch { return res.status(401).json({ error: "Invalid token" }); }
 
-  // Always verify user actually exists in DB — JWT only proves identity claim
   try {
     const result = await pool.query(
       "SELECT id, username, is_admin, is_owner, is_owner2, is_og, is_mod, is_vip FROM users WHERE id=$1",
@@ -237,7 +227,6 @@ async function requireAuth(req, res, next) {
   }
 }
 
-// Re-checks DB on every request — JWT only proves identity, DB decides rank
 async function requireAdmin(req, res, next) {
   const ip = getClientIP(req);
   if (isAdminLocked(ip)) return res.status(429).json({ error: "Too many failed attempts. Try again later." });
@@ -298,7 +287,6 @@ async function requireOwner(req, res, next) {
   }
 }
 
-// Mods, admins, and owners — DB-verified
 async function requireMod(req, res, next) {
   const ip = getClientIP(req);
   if (isAdminLocked(ip)) return res.status(429).json({ error: "Too many failed attempts. Try again later." });
@@ -328,6 +316,7 @@ async function requireMod(req, res, next) {
     return res.status(500).json({ error: "Server error" });
   }
 }
+
 app.get("/api/owner/audit", requireOwner, (req, res) => {
   audit(req, 'AUDIT_VIEW');
   res.json({ log: _auditLog });
@@ -337,14 +326,8 @@ app.get("/api/owner/audit", requireOwner, (req, res) => {
 //  HELPERS
 // ═══════════════════════════════════════
 function makeToken(userRow) {
-  // SECURITY: Only embed ID and username — NEVER embed rank flags in JWT.
-  // Ranks are always re-read from the DB on every privileged request.
-  // This prevents any token manipulation from granting elevated access.
   return jwt.sign(
-    {
-      id:       userRow.id,
-      username: userRow.username,
-    },
+    { id: userRow.id, username: userRow.username },
     JWT_SECRET,
     { expiresIn: "7d" }
   );
@@ -353,34 +336,34 @@ function makeToken(userRow) {
 function rowToState(row) {
   if (!row) return null;
   return {
-    score:          parseFloat(row.score) || 0,
-    luckLevel:      row.luck_level || 1,
-    luckXP:         parseFloat(row.luck_xp) || 0,
-    multLevel:      row.mult_level || 0,
-    cdLevel:        row.cd_level || 0,
-    autoLevel:      row.auto_level || 0,
-    vaultLevel:     row.vault_level || 0,
-    xpLevel:        row.xp_level || 0,
-    critLevel:      row.crit_level || 0,
-    echoLevel:      row.echo_level || 0,
-    soulLevel:      row.soul_level || 0,
-    voidupgLevel:   row.voidupg_level || 0,
-    ascLevel:       row.asc_level || 0,
-    timeLevel:      row.time_level || 0,
-    forgeLevel:     row.forge_level || 0,
-    prestigeLevel:  row.prestige_level || 0,
-    totalRolls:     row.total_rolls || 0,
-    legendaryCount: row.legendary_count || 0,
-    mythicCount:    row.mythic_count || 0,
-    divineCount:    row.divine_count || 0,
-    celestialCount: row.celestial_count || 0,
-    etherealCount:  row.ethereal_count || 0,
-    voidCount:      row.void_count || 0,
-    primordialCount:row.primordial_count || 0,
-    omegaCount:     row.omega_count || 0,
-    critCount:      row.crit_count || 0,
-    echoCount:      row.echo_count || 0,
-    achievements:   row.achievements || [],
+    score:           parseFloat(row.score) || 0,
+    luckLevel:       row.luck_level || 1,
+    luckXP:          parseFloat(row.luck_xp) || 0,
+    multLevel:       row.mult_level || 0,
+    cdLevel:         row.cd_level || 0,
+    autoLevel:       row.auto_level || 0,
+    vaultLevel:      row.vault_level || 0,
+    xpLevel:         row.xp_level || 0,
+    critLevel:       row.crit_level || 0,
+    echoLevel:       row.echo_level || 0,
+    soulLevel:       row.soul_level || 0,
+    voidupgLevel:    row.voidupg_level || 0,
+    ascLevel:        row.asc_level || 0,
+    timeLevel:       row.time_level || 0,
+    forgeLevel:      row.forge_level || 0,
+    prestigeLevel:   row.prestige_level || 0,
+    totalRolls:      row.total_rolls || 0,
+    legendaryCount:  row.legendary_count || 0,
+    mythicCount:     row.mythic_count || 0,
+    divineCount:     row.divine_count || 0,
+    celestialCount:  row.celestial_count || 0,
+    etherealCount:   row.ethereal_count || 0,
+    voidCount:       row.void_count || 0,
+    primordialCount: row.primordial_count || 0,
+    omegaCount:      row.omega_count || 0,
+    critCount:       row.crit_count || 0,
+    echoCount:       row.echo_count || 0,
+    achievements:    row.achievements || [],
   };
 }
 
@@ -415,14 +398,13 @@ async function recordIP(userId, ip) {
 
 // ═══════════════════════════════════════
 //  OWNER PASSPHRASE VERIFY
-//  No auth required — checked before login
 // ═══════════════════════════════════════
 const _ppFailures = new Map();
 const PP_MAX_ATTEMPTS = 5;
 const PP_LOCKOUT_MS   = 15 * 60 * 1000;
 
 app.post("/api/owner/verify-passphrase", (req, res) => {
-  const ip = getClientIP(req);
+  const ip   = getClientIP(req);
   const fail = _ppFailures.get(ip);
 
   if (fail && fail.count >= PP_MAX_ATTEMPTS && Date.now() - fail.ts < PP_LOCKOUT_MS) {
@@ -448,8 +430,6 @@ app.post("/api/owner/verify-passphrase", (req, res) => {
 // ═══════════════════════════════════════
 //  OWNER SESSION TOKEN (48h per-account)
 // ═══════════════════════════════════════
-
-// Generate/refresh 48h token — called right after successful login
 app.post("/api/owner/generate-token", requireOwner, async (req, res) => {
   try {
     const token = crypto.randomBytes(32).toString("hex");
@@ -465,15 +445,12 @@ app.post("/api/owner/generate-token", requireOwner, async (req, res) => {
   }
 });
 
-// Exchange stored owner token → fresh JWT (auto-login, no password needed)
 app.post("/api/owner/token-login", async (req, res) => {
   try {
     const { token } = req.body || {};
     if (!token) return res.status(400).json({ error: "Missing token" });
 
-    const result = await pool.query(
-      `SELECT * FROM users WHERE owner_token=$1`, [token]
-    );
+    const result = await pool.query(`SELECT * FROM users WHERE owner_token=$1`, [token]);
     if (!result.rows.length) return res.status(401).json({ error: "Invalid token" });
 
     const user = result.rows[0];
@@ -481,7 +458,7 @@ app.post("/api/owner/token-login", async (req, res) => {
     if (new Date(user.owner_token_exp) < new Date()) return res.status(401).json({ error: "Token expired" });
 
     return res.json({
-      token:   makeToken(user),
+      token: makeToken(user),
       user: {
         id:       user.id,
         username: user.username,
@@ -505,7 +482,6 @@ app.post("/api/auth/signup", async (req, res) => {
     const { username, password } = req.body || {};
     if (!username || username.length < 2) return res.status(400).json({ error: "Username must be 2+ chars" });
     if (!password || password.length < 6)  return res.status(400).json({ error: "Password must be 6+ chars" });
-    // Block reserved and spoofable usernames
     const RESERVED = ['admin','owner','mod','moderator','staff','system','bot','server','support','root','administrator','capitaldupe','capital'];
     if (RESERVED.includes(username.toLowerCase())) return res.status(400).json({ error: "Username is reserved" });
 
@@ -561,7 +537,6 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
-// Verify current token and return fresh user data from DB
 app.get("/api/auth/me", requireAuth, async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM users WHERE id = $1", [req.user.id]);
@@ -584,6 +559,7 @@ app.get("/api/auth/me", requireAuth, async (req, res) => {
     return res.status(500).json({ error: "Server error" });
   }
 });
+
 app.get("/api/game/load", requireAuth, async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM game_state WHERE user_id = $1", [req.user.id]);
@@ -596,41 +572,35 @@ app.get("/api/game/load", requireAuth, async (req, res) => {
 
 // ═══════════════════════════════════════
 //  GAMBLING ROUTE
-//  Atomic score delta — bypasses rate-cap since gambling wins/losses are instant
-//  Server validates the bet was fair and the delta matches the outcome
 // ═══════════════════════════════════════
 app.post("/api/game/gamble", requireAuth, async (req, res) => {
   try {
     const { bet, delta, game } = req.body || {};
 
-    // Validate inputs
     const betAmt   = parseFloat(bet);
     const deltaAmt = parseFloat(delta);
     if (isNaN(betAmt) || betAmt <= 0)   return res.status(400).json({ error: "Invalid bet" });
     if (isNaN(deltaAmt))                 return res.status(400).json({ error: "Invalid delta" });
-    if (!['roulette','blackjack'].includes(game)) return res.status(400).json({ error: "Invalid game" });
 
-    // Max bet cap — prevents someone betting 1Q and doubling it
-    const MAX_BET = 1_000_000_000_000; // 1 trillion max bet
+    // ── CHANGED: added 'horses' as a valid game ──
+    if (!['roulette', 'blackjack', 'horses'].includes(game)) {
+      return res.status(400).json({ error: "Invalid game" });
+    }
+
+    const MAX_BET = 1_000_000_000_000;
     if (betAmt > MAX_BET) return res.status(400).json({ error: `Max bet is ${MAX_BET}` });
 
-    // Delta must be a valid gambling outcome for the bet size:
-    // Roulette max win: 35x bet (single number). Blackjack max win: 2.5x bet (blackjack pays 3:2)
-    const MAX_WIN_MULT = game === 'roulette' ? 35 : 2.5;
+    // ── CHANGED: horses max win is 12x (longest odds horse payout) ──
+    const MAX_WIN_MULT = game === 'roulette' ? 35 : game === 'horses' ? 12 : 2.5;
     if (deltaAmt > betAmt * MAX_WIN_MULT) return res.status(400).json({ error: "Invalid win amount" });
-    // Max loss is the bet itself
-    if (deltaAmt < -betAmt) return res.status(400).json({ error: "Invalid loss amount" });
+    if (deltaAmt < -betAmt)               return res.status(400).json({ error: "Invalid loss amount" });
 
-    // Load current score
     const cur = await pool.query("SELECT score FROM game_state WHERE user_id=$1", [req.user.id]);
     if (!cur.rows.length) return res.status(404).json({ error: "No game state found" });
 
     const curScore = parseFloat(cur.rows[0].score) || 0;
-
-    // Can't bet more than you have
     if (betAmt > curScore) return res.status(400).json({ error: "Insufficient score" });
 
-    // Apply delta atomically
     const newScore = Math.max(0, curScore + deltaAmt);
     await pool.query(
       "UPDATE game_state SET score=$1, updated_at=NOW() WHERE user_id=$2",
@@ -649,47 +619,29 @@ app.post("/api/game/save", requireAuth, async (req, res) => {
   try {
     const s = req.body || {};
 
-    // ── Server-side validation: clamp all values to legitimate ranges ──
-    // A normal player cannot exceed these without cheating
     const clamp  = (v, min, max) => Math.min(max, Math.max(min, parseFloat(v) || 0));
     const clampI = (v, min, max) => Math.min(max, Math.max(min, parseInt(v)   || 0));
 
-    // First load their current state so we can validate progression
     const cur = await pool.query("SELECT * FROM game_state WHERE user_id = $1", [req.user.id]);
     const curState = cur.rows[0] || {};
 
-    // Score: validate based on time elapsed and max possible earn rate
-    // This prevents jumping from any score to an impossible value regardless of current score
     const MAX_SCORE      = 1e18;
     const curScore       = parseFloat(curState.score) || 0;
     const submittedScore = clamp(s.score, 0, MAX_SCORE);
 
-    // Calculate max score earnable since last save using actual game mechanics:
-    // - Fastest cooldown: ~0.2s (fully upgraded)
-    // - Max multiplier: ~200x (high prestige + all upgrades maxed)
-    // - Max roll value at omega: ~10,000 base
-    // - Vault passive income: generous upper bound ~1,000,000/sec at endgame
-    // = ~200 * 10000 * 5 rolls/sec + 1,000,000/sec vault ≈ ~11,000,000/sec absolute max
-    // We use 50,000,000/sec to be very generous for legitimate endgame players
     const MAX_SCORE_PER_SEC = 50_000_000;
     const lastSaveTime = curState.updated_at ? new Date(curState.updated_at).getTime() : 0;
-    const elapsedSecs  = lastSaveTime ? Math.max(0, (Date.now() - lastSaveTime) / 1000) : 300; // default 5 min for first save
+    const elapsedSecs  = lastSaveTime ? Math.max(0, (Date.now() - lastSaveTime) / 1000) : 300;
     const maxEarnable  = curScore + (MAX_SCORE_PER_SEC * elapsedSecs);
     const newScore     = Math.min(submittedScore, maxEarnable);
 
-    // Luck level: 1–100, can only go up
     const curLuck  = parseInt(curState.luck_level) || 1;
     const newLuck  = clampI(s.luckLevel, curLuck, 100);
 
-    // Prestige: can only go up by 1 per save — matches actual game mechanic
-    // (prestige requires Lv50 + 10k score, so jumping 0→50 in one save is impossible legit)
     const curPrestige = parseInt(curState.prestige_level) || 0;
     const newPrestige = clampI(s.prestigeLevel, curPrestige, curPrestige + 1);
 
-    // Upgrade levels: 0–200 each, can only increase
     const upg = (key, curKey, max = 200) => clampI(s[key], parseInt(curState[curKey]) || 0, max);
-
-    // Roll counts: can only increase
     const rolls = (key, curKey) => Math.max(parseInt(curState[curKey]) || 0, clampI(s[key], 0, 1e9));
 
     await pool.query(
@@ -756,9 +708,9 @@ app.post("/api/game/save", requireAuth, async (req, res) => {
 // ═══════════════════════════════════════
 app.get("/api/leaderboard", async (req, res) => {
   try {
-    const limit   = Math.min(parseInt(req.query.limit) || 50, 100);
-    const sortBy  = req.query.sort || "score";
-    const colMap  = { score: "gs.score", prestige: "gs.prestige_level", rolls: "gs.total_rolls", luck: "gs.luck_level" };
+    const limit    = Math.min(parseInt(req.query.limit) || 50, 100);
+    const sortBy   = req.query.sort || "score";
+    const colMap   = { score: "gs.score", prestige: "gs.prestige_level", rolls: "gs.total_rolls", luck: "gs.luck_level" };
     const orderCol = colMap[sortBy] || "gs.score";
 
     const result = await pool.query(
@@ -777,26 +729,26 @@ app.get("/api/leaderboard", async (req, res) => {
 
     return res.json({
       leaderboard: result.rows.map((r, i) => ({
-        rank:          i + 1,
-        id:            r.id,
-        username:      r.username,
-        isAdmin:       r.is_admin,
-        isOwner:       r.is_owner  || false,
-        isOwner2:      r.is_owner2 || false,
-        isOG:          r.is_og     || false,
-        isMod:         r.is_mod    || false,
-        isVIP:         r.is_vip    || false,
-        score:         parseFloat(r.score),
-        luckLevel:     r.luck_level,
-        prestigeLevel: r.prestige_level,
-        totalRolls:    r.total_rolls,
-        omegaCount:    r.omega_count,
-        voidCount:     r.void_count,
-        legendaryCount:r.legendary_count,
-        mythicCount:   r.mythic_count,
-        divineCount:   r.divine_count,
-        achievements:  (r.achievements || []).length,
-        lastSeen:      r.updated_at,
+        rank:           i + 1,
+        id:             r.id,
+        username:       r.username,
+        isAdmin:        r.is_admin,
+        isOwner:        r.is_owner  || false,
+        isOwner2:       r.is_owner2 || false,
+        isOG:           r.is_og     || false,
+        isMod:          r.is_mod    || false,
+        isVIP:          r.is_vip    || false,
+        score:          parseFloat(r.score),
+        luckLevel:      r.luck_level,
+        prestigeLevel:  r.prestige_level,
+        totalRolls:     r.total_rolls,
+        omegaCount:     r.omega_count,
+        voidCount:      r.void_count,
+        legendaryCount: r.legendary_count,
+        mythicCount:    r.mythic_count,
+        divineCount:    r.divine_count,
+        achievements:   (r.achievements || []).length,
+        lastSeen:       r.updated_at,
       })),
     });
   } catch (err) {
@@ -805,9 +757,8 @@ app.get("/api/leaderboard", async (req, res) => {
   }
 });
 
-
 // ═══════════════════════════════════════
-//  MOD ROUTES  (no IP data returned)
+//  MOD ROUTES
 // ═══════════════════════════════════════
 app.get("/api/mod/users", requireMod, async (req, res) => {
   try {
@@ -819,7 +770,6 @@ app.get("/api/mod/users", requireMod, async (req, res) => {
       LEFT JOIN game_state gs ON gs.user_id = u.id
       ORDER BY gs.score DESC NULLS LAST
     `);
-    // Never return IP data to mods
     return res.json({ users: result.rows });
   } catch (err) {
     console.error(err);
@@ -832,7 +782,6 @@ app.post("/api/mod/reset/:id", requireMod, async (req, res) => {
     const target = await pool.query("SELECT is_admin, is_owner, is_owner2 FROM users WHERE id=$1", [req.params.id]);
     if (!target.rows.length) return res.status(404).json({ error: "User not found" });
     const t = target.rows[0];
-    // Mods cannot reset admins or owners
     if (t.is_admin || t.is_owner || t.is_owner2) {
       audit(req, 'MOD_RESET_BLOCKED', `tried to reset admin/owner ${req.params.id}`);
       return res.status(403).json({ error: "Cannot reset admins or owners" });
@@ -976,7 +925,6 @@ app.post("/api/admin/reset/:id", requireAdmin, async (req, res) => {
   }
 });
 
-// Global settings (in-memory)
 let globalSettings = { globalMult: 1, xpRate: 1, broadcastMsg: "" };
 app.get("/api/settings", (req, res) => res.json(globalSettings));
 app.post("/api/admin/settings", requireAdmin, (req, res) => {
@@ -987,7 +935,6 @@ app.post("/api/admin/settings", requireAdmin, (req, res) => {
   return res.json({ ok: true, settings: globalSettings });
 });
 
-// Owner IP lookup
 app.get("/api/owner/ips", requireOwner, async (req, res) => {
   try {
     const result = await pool.query(`
@@ -1008,14 +955,11 @@ app.get("/api/owner/ips", requireOwner, async (req, res) => {
   }
 });
 
-
 // ═══════════════════════════════════════
 //  MULTIPLAYER — IN-MEMORY ROOMS
-//  Polling-based (no WebSocket needed)
-//  Rooms expire after 10 min of inactivity
 // ═══════════════════════════════════════
-const rooms = new Map(); // roomId → room object
-const ROOM_TTL = 10 * 60 * 1000; // 10 min
+const rooms = new Map();
+const ROOM_TTL = 10 * 60 * 1000;
 
 function makeRoomId() {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -1033,10 +977,10 @@ function getRoom(id) { return rooms.get(id) || null; }
 
 function roomView(room, myId) {
   return {
-    id:          room.id,
-    game:        room.game,
-    phase:       room.phase,
-    players:     room.players.map(p => ({
+    id:             room.id,
+    game:           room.game,
+    phase:          room.phase,
+    players:        room.players.map(p => ({
       id:       p.id,
       username: p.username,
       bet:      p.bet,
@@ -1044,7 +988,7 @@ function roomView(room, myId) {
       isYou:    p.id === myId,
       rank:     p.rank,
     })),
-    chat:        room.chat.slice(-50),
+    chat:           room.chat.slice(-50),
     rouletteResult: room.rouletteResult || null,
     bjState:        room.bjState        || null,
     lastActivity:   room.lastActivity,
@@ -1052,19 +996,18 @@ function roomView(room, myId) {
   };
 }
 
-// Create room
 app.post("/api/room/create", requireAuth, (req, res) => {
   cleanRooms();
   const { game } = req.body || {};
-  if (!['roulette','blackjack'].includes(game)) return res.status(400).json({ error: "Invalid game" });
+  if (!['roulette', 'blackjack'].includes(game)) return res.status(400).json({ error: "Invalid game" });
 
   const id   = makeRoomId();
   const rank = req.user.isOwner || req.user.isOwner2 ? 'owner' : req.user.isAdmin ? 'admin' : req.user.isMod ? 'mod' : req.user.isVIP ? 'vip' : req.user.isOG ? 'og' : 'player';
   const room = {
     id, game,
-    phase:   'waiting', // waiting | betting | playing | results
-    players: [{ id: req.user.id, username: req.user.username, bet: 0, ready: false, rank }],
-    chat:    [{ system: true, text: `Room ${id} created. Share the code!`, ts: Date.now() }],
+    phase:          'waiting',
+    players:        [{ id: req.user.id, username: req.user.username, bet: 0, ready: false, rank }],
+    chat:           [{ system: true, text: `Room ${id} created. Share the code!`, ts: Date.now() }],
     rouletteResult: null,
     bjState:        null,
     lastActivity:   Date.now(),
@@ -1076,7 +1019,6 @@ app.post("/api/room/create", requireAuth, (req, res) => {
   res.json({ room: roomView(room, req.user.id) });
 });
 
-// Join room
 app.post("/api/room/:id/join", requireAuth, (req, res) => {
   const room = getRoom(req.params.id);
   if (!room) return res.status(404).json({ error: "Room not found" });
@@ -1093,17 +1035,14 @@ app.post("/api/room/:id/join", requireAuth, (req, res) => {
   res.json({ room: roomView(room, req.user.id) });
 });
 
-// Poll room state
 app.get("/api/room/:id/poll", requireAuth, (req, res) => {
   const room = getRoom(req.params.id);
   if (!room) return res.status(404).json({ error: "Room not found or expired" });
 
-  // Mark player as still active
   const p = room.players.find(p => p.id === req.user.id);
   if (p) p.lastSeen = Date.now();
   room.lastActivity = Date.now();
 
-  // Auto-remove players gone > 30 sec
   const cutoff = Date.now() - 30_000;
   const before = room.players.length;
   room.players = room.players.filter(p => !p.lastSeen || p.lastSeen > cutoff || p.id === room.hostId);
@@ -1114,7 +1053,6 @@ app.get("/api/room/:id/poll", requireAuth, (req, res) => {
   res.json({ room: roomView(room, req.user.id) });
 });
 
-// Chat
 app.post("/api/room/:id/chat", requireAuth, (req, res) => {
   const room = getRoom(req.params.id);
   if (!room) return res.status(404).json({ error: "Room not found" });
@@ -1129,7 +1067,6 @@ app.post("/api/room/:id/chat", requireAuth, (req, res) => {
 });
 
 // ── ROULETTE MULTIPLAYER ──
-// Set bet
 app.post("/api/room/:id/roulette/bet", requireAuth, async (req, res) => {
   const room = getRoom(req.params.id);
   if (!room || room.game !== 'roulette') return res.status(404).json({ error: "Room not found" });
@@ -1142,12 +1079,11 @@ app.post("/api/room/:id/roulette/bet", requireAuth, async (req, res) => {
   if (isNaN(betAmt) || betAmt <= 0) return res.status(400).json({ error: "Invalid bet" });
   if (betAmt > 1_000_000_000_000) return res.status(400).json({ error: "Max bet 1T" });
 
-  // Verify they have enough score
   const gs = await pool.query("SELECT score FROM game_state WHERE user_id=$1", [req.user.id]);
   if (!gs.rows.length || parseFloat(gs.rows[0].score) < betAmt) return res.status(400).json({ error: "Insufficient score" });
 
   p.bet   = betAmt;
-  p.bets  = bets; // store their specific number/outside bets
+  p.bets  = bets;
   p.ready = true;
   room.phase = 'betting';
   room.lastActivity = Date.now();
@@ -1155,7 +1091,6 @@ app.post("/api/room/:id/roulette/bet", requireAuth, async (req, res) => {
   res.json({ ok: true, room: roomView(room, req.user.id) });
 });
 
-// Spin (any player can trigger once all ready, or host after 30s)
 app.post("/api/room/:id/roulette/spin", requireAuth, async (req, res) => {
   const room = getRoom(req.params.id);
   if (!room || room.game !== 'roulette') return res.status(404).json({ error: "Room not found" });
@@ -1163,12 +1098,17 @@ app.post("/api/room/:id/roulette/spin", requireAuth, async (req, res) => {
   if (room.players.filter(p => p.bet > 0).length === 0) return res.status(400).json({ error: "No bets placed" });
 
   room.phase = 'playing';
-  const result = Math.floor(Math.random() * 37);
+  const result  = Math.floor(Math.random() * 37);
   const RED_NUMS = new Set([1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]);
   const col = result === 0 ? 'green' : RED_NUMS.has(result) ? 'red' : 'black';
 
-  // Calculate each player's delta
-  const outside = { red: col==='red', black: col==='black', even: result!==0&&result%2===0, odd: result!==0&&result%2!==0, low: result>=1&&result<=18, high: result>=19&&result<=36, dozen1: result>=1&&result<=12, dozen2: result>=13&&result<=24, dozen3: result>=25&&result<=36, col1: result!==0&&result%3===1, col2: result!==0&&result%3===2, col3: result!==0&&result%3===0 };
+  const outside = {
+    red: col==='red', black: col==='black',
+    even: result!==0&&result%2===0, odd: result!==0&&result%2!==0,
+    low: result>=1&&result<=18, high: result>=19&&result<=36,
+    dozen1: result>=1&&result<=12, dozen2: result>=13&&result<=24, dozen3: result>=25&&result<=36,
+    col1: result!==0&&result%3===1, col2: result!==0&&result%3===2, col3: result!==0&&result%3===0,
+  };
   const outsidePayout = { red:1, black:1, even:1, odd:1, low:1, high:1, dozen1:2, dozen2:2, dozen3:2, col1:2, col2:2, col3:2 };
 
   const playerResults = [];
@@ -1184,11 +1124,9 @@ app.post("/api/room/:id/roulette/spin", requireAuth, async (req, res) => {
     }
     playerResults.push({ id: p.id, username: p.username, delta, bet: p.bet });
 
-    // Apply to DB
     try {
       const cur = await pool.query("SELECT score FROM game_state WHERE user_id=$1", [p.id]);
-      const cur_score = parseFloat(cur.rows[0]?.score) || 0;
-      const newScore = Math.max(0, cur_score + delta);
+      const newScore = Math.max(0, (parseFloat(cur.rows[0]?.score) || 0) + delta);
       await pool.query("UPDATE game_state SET score=$1, updated_at=NOW() WHERE user_id=$2", [newScore, p.id]);
       audit({ headers: { authorization: 'room' }, socket: { remoteAddress: 'room' }, user: p }, `ROOM_ROULETTE`, `room:${room.id} result:${result} delta:${delta}`);
     } catch(e) { console.error('Score update error:', e); }
@@ -1198,10 +1136,9 @@ app.post("/api/room/:id/roulette/spin", requireAuth, async (req, res) => {
   room.phase = 'results';
   room.chat.push({ system: true, text: `Spin result: ${result} (${col}) — ${playerResults.filter(r=>r.delta>0).length} winner(s)`, ts: Date.now() });
 
-  // Reset for next round after 8s
   setTimeout(() => {
     if (!rooms.has(room.id)) return;
-    room.phase   = 'waiting';
+    room.phase = 'waiting';
     room.players.forEach(p => { p.bet = 0; p.bets = null; p.ready = false; });
     room.rouletteResult = null;
     room.lastActivity   = Date.now();
@@ -1211,9 +1148,6 @@ app.post("/api/room/:id/roulette/spin", requireAuth, async (req, res) => {
 });
 
 // ── BLACKJACK MULTIPLAYER ──
-// Player vs Player: one player is Dealer, others are Players
-// Dealer is always the host (room.hostId)
-
 app.post("/api/room/:id/blackjack/deal", requireAuth, async (req, res) => {
   const room = getRoom(req.params.id);
   if (!room || room.game !== 'blackjack') return res.status(404).json({ error: "Room not found" });
@@ -1221,12 +1155,10 @@ app.post("/api/room/:id/blackjack/deal", requireAuth, async (req, res) => {
   if (room.players.length < 2) return res.status(400).json({ error: "Need at least 2 players" });
   if (room.phase === 'playing') return res.status(400).json({ error: "Round already in progress" });
 
-  // Validate all non-dealer players have placed bets
   const nonDealers = room.players.filter(p => p.id !== room.hostId);
   const allBet = nonDealers.every(p => p.bet > 0);
   if (!allBet) return res.status(400).json({ error: "All players must place bets first" });
 
-  // Build shoe and deal
   const VALS = ['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
   const SUITS = ['♠','♥','♦','♣'];
   let shoe = [];
@@ -1239,14 +1171,13 @@ app.post("/api/room/:id/blackjack/deal", requireAuth, async (req, res) => {
     shoe,
     dealerHand:  [draw(), draw()],
     playerHands: {},
-    currentTurn: null, // player id whose turn it is
+    currentTurn: null,
     turnOrder:   nonDealers.map(p => p.id),
     turnIndex:   0,
-    phase:       'player_turns', // player_turns | dealer_turn | results
+    phase:       'player_turns',
     results:     {},
   };
 
-  // Deal to each player
   for (const p of nonDealers) {
     bjState.playerHands[p.id] = [draw(), draw()];
   }
@@ -1260,7 +1191,6 @@ app.post("/api/room/:id/blackjack/deal", requireAuth, async (req, res) => {
   res.json({ room: roomView(room, req.user.id) });
 });
 
-// Player action (hit/stand)
 app.post("/api/room/:id/blackjack/action", requireAuth, async (req, res) => {
   const room = getRoom(req.params.id);
   if (!room || room.game !== 'blackjack' || !room.bjState) return res.status(404).json({ error: "No active hand" });
@@ -1274,26 +1204,20 @@ app.post("/api/room/:id/blackjack/action", requireAuth, async (req, res) => {
 
   if (action === 'hit') {
     hand.push(bj.shoe.pop());
-    if (total(hand) >= 21) {
-      bj.turnIndex++;
-    }
+    if (total(hand) >= 21) bj.turnIndex++;
   } else if (action === 'stand') {
     bj.turnIndex++;
   }
 
-  // Advance turn
   if (bj.turnIndex >= bj.turnOrder.length) {
-    // Dealer's turn
     bj.phase = 'dealer_turn';
     bj.currentTurn = room.hostId;
 
-    // Dealer draws to 17
     while (total(bj.dealerHand) < 17) bj.dealerHand.push(bj.shoe.pop());
 
     const dTotal = total(bj.dealerHand);
     const dBust  = dTotal > 21;
 
-    // Resolve each player
     for (const p of room.players.filter(r => r.id !== room.hostId)) {
       const pHand  = bj.playerHands[p.id];
       const pTotal = total(pHand);
@@ -1302,37 +1226,34 @@ app.post("/api/room/:id/blackjack/action", requireAuth, async (req, res) => {
       let delta    = -p.bet;
       let outcome  = 'lose';
 
-      if (pTotal > 21) { delta = -p.bet; outcome = 'bust'; }
-      else if (pBJ && dBJ) { delta = 0; outcome = 'push'; }
-      else if (pBJ)  { delta = Math.floor(p.bet * 1.5); outcome = 'blackjack'; }
-      else if (dBJ)  { delta = -p.bet; outcome = 'lose'; }
-      else if (dBust){ delta = p.bet; outcome = 'win'; }
-      else if (pTotal > dTotal) { delta = p.bet; outcome = 'win'; }
+      if (pTotal > 21)        { delta = -p.bet; outcome = 'bust'; }
+      else if (pBJ && dBJ)    { delta = 0;      outcome = 'push'; }
+      else if (pBJ)           { delta = Math.floor(p.bet * 1.5); outcome = 'blackjack'; }
+      else if (dBJ)           { delta = -p.bet; outcome = 'lose'; }
+      else if (dBust)         { delta = p.bet;  outcome = 'win'; }
+      else if (pTotal > dTotal) { delta = p.bet;  outcome = 'win'; }
       else if (pTotal < dTotal) { delta = -p.bet; outcome = 'lose'; }
-      else { delta = 0; outcome = 'push'; }
+      else                    { delta = 0;      outcome = 'push'; }
 
-      // Dealer (host) gets opposite
       const dealerDelta = -delta;
       bj.results[p.id] = { delta, outcome, pTotal, dTotal };
 
-      // Apply to DB
       try {
-        const pCur  = await pool.query("SELECT score FROM game_state WHERE user_id=$1",[p.id]);
-        const pScore = Math.max(0, (parseFloat(pCur.rows[0]?.score)||0) + delta);
-        await pool.query("UPDATE game_state SET score=$1, updated_at=NOW() WHERE user_id=$2",[pScore,p.id]);
+        const pCur   = await pool.query("SELECT score FROM game_state WHERE user_id=$1", [p.id]);
+        const pScore = Math.max(0, (parseFloat(pCur.rows[0]?.score) || 0) + delta);
+        await pool.query("UPDATE game_state SET score=$1, updated_at=NOW() WHERE user_id=$2", [pScore, p.id]);
 
-        const dCur   = await pool.query("SELECT score FROM game_state WHERE user_id=$1",[room.hostId]);
-        const dScore = Math.max(0, (parseFloat(dCur.rows[0]?.score)||0) + dealerDelta);
-        await pool.query("UPDATE game_state SET score=$1, updated_at=NOW() WHERE user_id=$2",[dScore,room.hostId]);
+        const dCur   = await pool.query("SELECT score FROM game_state WHERE user_id=$1", [room.hostId]);
+        const dScore = Math.max(0, (parseFloat(dCur.rows[0]?.score) || 0) + dealerDelta);
+        await pool.query("UPDATE game_state SET score=$1, updated_at=NOW() WHERE user_id=$2", [dScore, room.hostId]);
       } catch(e) { console.error('BJ score error:', e); }
     }
 
     bj.phase = 'results';
     room.phase = 'results';
-    const wins = Object.values(bj.results).filter(r=>r.outcome==='win'||r.outcome==='blackjack').length;
+    const wins = Object.values(bj.results).filter(r => r.outcome==='win' || r.outcome==='blackjack').length;
     room.chat.push({ system: true, text: `Dealer: ${dTotal}${dBust?' (BUST)':''} — ${wins} player(s) won`, ts: Date.now() });
 
-    // Reset after 8s
     setTimeout(() => {
       if (!rooms.has(room.id)) return;
       room.phase   = 'waiting';
@@ -1348,7 +1269,6 @@ app.post("/api/room/:id/blackjack/action", requireAuth, async (req, res) => {
   res.json({ room: roomView(room, req.user.id) });
 });
 
-// Place bet for blackjack
 app.post("/api/room/:id/blackjack/bet", requireAuth, async (req, res) => {
   const room = getRoom(req.params.id);
   if (!room || room.game !== 'blackjack') return res.status(404).json({ error: "Room not found" });
@@ -1357,7 +1277,7 @@ app.post("/api/room/:id/blackjack/bet", requireAuth, async (req, res) => {
 
   const betAmt = parseFloat(req.body.bet);
   if (isNaN(betAmt) || betAmt <= 0) return res.status(400).json({ error: "Invalid bet" });
-  if (betAmt > 1_000_000_000_000) return res.status(400).json({ error: "Max bet 1T" });
+  if (betAmt > 1_000_000_000_000)   return res.status(400).json({ error: "Max bet 1T" });
 
   const gs = await pool.query("SELECT score FROM game_state WHERE user_id=$1", [req.user.id]);
   if (!gs.rows.length || parseFloat(gs.rows[0].score) < betAmt) return res.status(400).json({ error: "Insufficient score" });
@@ -1370,7 +1290,6 @@ app.post("/api/room/:id/blackjack/bet", requireAuth, async (req, res) => {
   res.json({ ok: true, room: roomView(room, req.user.id) });
 });
 
-// Leave room
 app.post("/api/room/:id/leave", requireAuth, (req, res) => {
   const room = getRoom(req.params.id);
   if (!room) return res.json({ ok: true });
@@ -1380,7 +1299,6 @@ app.post("/api/room/:id/leave", requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-// List open rooms
 app.get("/api/rooms/:game", requireAuth, (req, res) => {
   cleanRooms();
   const { game } = req.params;
@@ -1390,9 +1308,11 @@ app.get("/api/rooms/:game", requireAuth, (req, res) => {
   res.json({ rooms: list });
 });
 
-
+// ═══════════════════════════════════════
+//  HEALTH / ROOT
+// ═══════════════════════════════════════
 app.get("/health", (req, res) => res.json({ status: "ok", time: new Date().toISOString() }));
-app.get("/",       (req, res) => res.json({ name: "Capital RNG API", version: "2.0.0" }));
+app.get("/",       (req, res) => res.json({ name: "Capital RNG API", version: "2.1.0" }));
 
 // ═══════════════════════════════════════
 //  START
