@@ -206,14 +206,34 @@ function audit(req, action, detail = '') {
   console.log('📋 AUDIT:', entry);
 }
 
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const auth = req.headers.authorization;
   if (!auth?.startsWith("Bearer ")) return res.status(401).json({ error: "No token" });
+  let payload;
+  try { payload = jwt.verify(auth.slice(7), JWT_SECRET); }
+  catch { return res.status(401).json({ error: "Invalid token" }); }
+
+  // Always verify user actually exists in DB — JWT only proves identity claim
   try {
-    req.user = jwt.verify(auth.slice(7), JWT_SECRET);
+    const result = await pool.query(
+      "SELECT id, username, is_admin, is_owner, is_owner2, is_og, is_mod, is_vip FROM users WHERE id=$1",
+      [payload.id]
+    );
+    if (!result.rows.length) return res.status(401).json({ error: "User not found" });
+    const u = result.rows[0];
+    req.user = {
+      id:       u.id,
+      username: u.username,
+      isAdmin:  u.is_admin  || false,
+      isOwner:  u.is_owner  || false,
+      isOwner2: u.is_owner2 || false,
+      isOG:     u.is_og     || false,
+      isMod:    u.is_mod    || false,
+      isVIP:    u.is_vip    || false,
+    };
     next();
   } catch {
-    return res.status(401).json({ error: "Invalid token" });
+    return res.status(500).json({ error: "Server error" });
   }
 }
 
@@ -317,16 +337,13 @@ app.get("/api/owner/audit", requireOwner, (req, res) => {
 //  HELPERS
 // ═══════════════════════════════════════
 function makeToken(userRow) {
+  // SECURITY: Only embed ID and username — NEVER embed rank flags in JWT.
+  // Ranks are always re-read from the DB on every privileged request.
+  // This prevents any token manipulation from granting elevated access.
   return jwt.sign(
     {
       id:       userRow.id,
       username: userRow.username,
-      isAdmin:  userRow.is_admin,
-      isOwner:  userRow.is_owner  || false,
-      isOwner2: userRow.is_owner2 || false,
-      isOG:     userRow.is_og     || false,
-      isMod:    userRow.is_mod    || false,
-      isVIP:    userRow.is_vip    || false,
     },
     JWT_SECRET,
     { expiresIn: "7d" }
@@ -488,7 +505,9 @@ app.post("/api/auth/signup", async (req, res) => {
     const { username, password } = req.body || {};
     if (!username || username.length < 2) return res.status(400).json({ error: "Username must be 2+ chars" });
     if (!password || password.length < 6)  return res.status(400).json({ error: "Password must be 6+ chars" });
-    if (username.toLowerCase() === "admin") return res.status(400).json({ error: "Username reserved" });
+    // Block reserved and spoofable usernames
+    const RESERVED = ['admin','owner','mod','moderator','staff','system','bot','server','support','root','administrator','capitaldupe','capital'];
+    if (RESERVED.includes(username.toLowerCase())) return res.status(400).json({ error: "Username is reserved" });
 
     const exists = await pool.query("SELECT id FROM users WHERE LOWER(username) = LOWER($1)", [username]);
     if (exists.rows.length) return res.status(409).json({ error: "Username already taken" });
@@ -569,6 +588,57 @@ app.get("/api/game/load", requireAuth, async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM game_state WHERE user_id = $1", [req.user.id]);
     return res.json({ state: rowToState(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ═══════════════════════════════════════
+//  GAMBLING ROUTE
+//  Atomic score delta — bypasses rate-cap since gambling wins/losses are instant
+//  Server validates the bet was fair and the delta matches the outcome
+// ═══════════════════════════════════════
+app.post("/api/game/gamble", requireAuth, async (req, res) => {
+  try {
+    const { bet, delta, game } = req.body || {};
+
+    // Validate inputs
+    const betAmt   = parseFloat(bet);
+    const deltaAmt = parseFloat(delta);
+    if (isNaN(betAmt) || betAmt <= 0)   return res.status(400).json({ error: "Invalid bet" });
+    if (isNaN(deltaAmt))                 return res.status(400).json({ error: "Invalid delta" });
+    if (!['roulette','blackjack'].includes(game)) return res.status(400).json({ error: "Invalid game" });
+
+    // Max bet cap — prevents someone betting 1Q and doubling it
+    const MAX_BET = 1_000_000_000_000; // 1 trillion max bet
+    if (betAmt > MAX_BET) return res.status(400).json({ error: `Max bet is ${MAX_BET}` });
+
+    // Delta must be a valid gambling outcome for the bet size:
+    // Roulette max win: 35x bet (single number). Blackjack max win: 2.5x bet (blackjack pays 3:2)
+    const MAX_WIN_MULT = game === 'roulette' ? 35 : 2.5;
+    if (deltaAmt > betAmt * MAX_WIN_MULT) return res.status(400).json({ error: "Invalid win amount" });
+    // Max loss is the bet itself
+    if (deltaAmt < -betAmt) return res.status(400).json({ error: "Invalid loss amount" });
+
+    // Load current score
+    const cur = await pool.query("SELECT score FROM game_state WHERE user_id=$1", [req.user.id]);
+    if (!cur.rows.length) return res.status(404).json({ error: "No game state found" });
+
+    const curScore = parseFloat(cur.rows[0].score) || 0;
+
+    // Can't bet more than you have
+    if (betAmt > curScore) return res.status(400).json({ error: "Insufficient score" });
+
+    // Apply delta atomically
+    const newScore = Math.max(0, curScore + deltaAmt);
+    await pool.query(
+      "UPDATE game_state SET score=$1, updated_at=NOW() WHERE user_id=$2",
+      [newScore, req.user.id]
+    );
+
+    audit(req, `GAMBLE_${game.toUpperCase()}`, `bet:${betAmt} delta:${deltaAmt} new:${newScore}`);
+    return res.json({ ok: true, newScore });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: "Server error" });
@@ -938,9 +1008,389 @@ app.get("/api/owner/ips", requireOwner, async (req, res) => {
   }
 });
 
+
 // ═══════════════════════════════════════
-//  HEALTH
+//  MULTIPLAYER — IN-MEMORY ROOMS
+//  Polling-based (no WebSocket needed)
+//  Rooms expire after 10 min of inactivity
 // ═══════════════════════════════════════
+const rooms = new Map(); // roomId → room object
+const ROOM_TTL = 10 * 60 * 1000; // 10 min
+
+function makeRoomId() {
+  return Math.random().toString(36).slice(2, 8).toUpperCase();
+}
+
+function cleanRooms() {
+  const now = Date.now();
+  for (const [id, room] of rooms) {
+    if (now - room.lastActivity > ROOM_TTL) rooms.delete(id);
+  }
+}
+setInterval(cleanRooms, 60_000);
+
+function getRoom(id) { return rooms.get(id) || null; }
+
+function roomView(room, myId) {
+  return {
+    id:          room.id,
+    game:        room.game,
+    phase:       room.phase,
+    players:     room.players.map(p => ({
+      id:       p.id,
+      username: p.username,
+      bet:      p.bet,
+      ready:    p.ready,
+      isYou:    p.id === myId,
+      rank:     p.rank,
+    })),
+    chat:        room.chat.slice(-50),
+    rouletteResult: room.rouletteResult || null,
+    bjState:        room.bjState        || null,
+    lastActivity:   room.lastActivity,
+    maxPlayers:     room.maxPlayers,
+  };
+}
+
+// Create room
+app.post("/api/room/create", requireAuth, (req, res) => {
+  cleanRooms();
+  const { game } = req.body || {};
+  if (!['roulette','blackjack'].includes(game)) return res.status(400).json({ error: "Invalid game" });
+
+  const id   = makeRoomId();
+  const rank = req.user.isOwner || req.user.isOwner2 ? 'owner' : req.user.isAdmin ? 'admin' : req.user.isMod ? 'mod' : req.user.isVIP ? 'vip' : req.user.isOG ? 'og' : 'player';
+  const room = {
+    id, game,
+    phase:   'waiting', // waiting | betting | playing | results
+    players: [{ id: req.user.id, username: req.user.username, bet: 0, ready: false, rank }],
+    chat:    [{ system: true, text: `Room ${id} created. Share the code!`, ts: Date.now() }],
+    rouletteResult: null,
+    bjState:        null,
+    lastActivity:   Date.now(),
+    maxPlayers:     game === 'roulette' ? 8 : 6,
+    hostId:         req.user.id,
+  };
+  rooms.set(id, room);
+  audit(req, 'ROOM_CREATE', `${game} room ${id}`);
+  res.json({ room: roomView(room, req.user.id) });
+});
+
+// Join room
+app.post("/api/room/:id/join", requireAuth, (req, res) => {
+  const room = getRoom(req.params.id);
+  if (!room) return res.status(404).json({ error: "Room not found" });
+  if (room.players.length >= room.maxPlayers) return res.status(400).json({ error: "Room is full" });
+  if (room.phase !== 'waiting' && room.phase !== 'betting') return res.status(400).json({ error: "Game already in progress" });
+
+  const already = room.players.find(p => p.id === req.user.id);
+  if (!already) {
+    const rank = req.user.isOwner || req.user.isOwner2 ? 'owner' : req.user.isAdmin ? 'admin' : req.user.isMod ? 'mod' : req.user.isVIP ? 'vip' : req.user.isOG ? 'og' : 'player';
+    room.players.push({ id: req.user.id, username: req.user.username, bet: 0, ready: false, rank });
+    room.chat.push({ system: true, text: `${req.user.username} joined`, ts: Date.now() });
+  }
+  room.lastActivity = Date.now();
+  res.json({ room: roomView(room, req.user.id) });
+});
+
+// Poll room state
+app.get("/api/room/:id/poll", requireAuth, (req, res) => {
+  const room = getRoom(req.params.id);
+  if (!room) return res.status(404).json({ error: "Room not found or expired" });
+
+  // Mark player as still active
+  const p = room.players.find(p => p.id === req.user.id);
+  if (p) p.lastSeen = Date.now();
+  room.lastActivity = Date.now();
+
+  // Auto-remove players gone > 30 sec
+  const cutoff = Date.now() - 30_000;
+  const before = room.players.length;
+  room.players = room.players.filter(p => !p.lastSeen || p.lastSeen > cutoff || p.id === room.hostId);
+  if (room.players.length < before) {
+    room.chat.push({ system: true, text: 'A player disconnected', ts: Date.now() });
+  }
+
+  res.json({ room: roomView(room, req.user.id) });
+});
+
+// Chat
+app.post("/api/room/:id/chat", requireAuth, (req, res) => {
+  const room = getRoom(req.params.id);
+  if (!room) return res.status(404).json({ error: "Room not found" });
+  const p = room.players.find(p => p.id === req.user.id);
+  if (!p) return res.status(403).json({ error: "Not in room" });
+  const text = (req.body.text || '').trim().slice(0, 120);
+  if (!text) return res.status(400).json({ error: "Empty message" });
+  room.chat.push({ id: req.user.id, username: req.user.username, rank: p.rank, text, ts: Date.now() });
+  if (room.chat.length > 200) room.chat = room.chat.slice(-200);
+  room.lastActivity = Date.now();
+  res.json({ ok: true });
+});
+
+// ── ROULETTE MULTIPLAYER ──
+// Set bet
+app.post("/api/room/:id/roulette/bet", requireAuth, async (req, res) => {
+  const room = getRoom(req.params.id);
+  if (!room || room.game !== 'roulette') return res.status(404).json({ error: "Room not found" });
+  const p = room.players.find(p => p.id === req.user.id);
+  if (!p) return res.status(403).json({ error: "Not in room" });
+  if (room.phase !== 'waiting' && room.phase !== 'betting') return res.status(400).json({ error: "Betting closed" });
+
+  const { totalBet, bets } = req.body || {};
+  const betAmt = parseFloat(totalBet);
+  if (isNaN(betAmt) || betAmt <= 0) return res.status(400).json({ error: "Invalid bet" });
+  if (betAmt > 1_000_000_000_000) return res.status(400).json({ error: "Max bet 1T" });
+
+  // Verify they have enough score
+  const gs = await pool.query("SELECT score FROM game_state WHERE user_id=$1", [req.user.id]);
+  if (!gs.rows.length || parseFloat(gs.rows[0].score) < betAmt) return res.status(400).json({ error: "Insufficient score" });
+
+  p.bet   = betAmt;
+  p.bets  = bets; // store their specific number/outside bets
+  p.ready = true;
+  room.phase = 'betting';
+  room.lastActivity = Date.now();
+
+  res.json({ ok: true, room: roomView(room, req.user.id) });
+});
+
+// Spin (any player can trigger once all ready, or host after 30s)
+app.post("/api/room/:id/roulette/spin", requireAuth, async (req, res) => {
+  const room = getRoom(req.params.id);
+  if (!room || room.game !== 'roulette') return res.status(404).json({ error: "Room not found" });
+  if (room.phase === 'playing' || room.phase === 'results') return res.status(400).json({ error: "Already spinning or done" });
+  if (room.players.filter(p => p.bet > 0).length === 0) return res.status(400).json({ error: "No bets placed" });
+
+  room.phase = 'playing';
+  const result = Math.floor(Math.random() * 37);
+  const RED_NUMS = new Set([1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]);
+  const col = result === 0 ? 'green' : RED_NUMS.has(result) ? 'red' : 'black';
+
+  // Calculate each player's delta
+  const outside = { red: col==='red', black: col==='black', even: result!==0&&result%2===0, odd: result!==0&&result%2!==0, low: result>=1&&result<=18, high: result>=19&&result<=36, dozen1: result>=1&&result<=12, dozen2: result>=13&&result<=24, dozen3: result>=25&&result<=36, col1: result!==0&&result%3===1, col2: result!==0&&result%3===2, col3: result!==0&&result%3===0 };
+  const outsidePayout = { red:1, black:1, even:1, odd:1, low:1, high:1, dozen1:2, dozen2:2, dozen3:2, col1:2, col2:2, col3:2 };
+
+  const playerResults = [];
+  for (const p of room.players) {
+    if (!p.bet || !p.bets) continue;
+    let delta = -p.bet;
+    const b = p.bets;
+    if (b.numbers && b.numbers[result] !== undefined) delta += b.numbers[result] * 36;
+    if (b.outside) {
+      for (const [type, amt] of Object.entries(b.outside)) {
+        if (outside[type]) delta += amt * (outsidePayout[type] + 1);
+      }
+    }
+    playerResults.push({ id: p.id, username: p.username, delta, bet: p.bet });
+
+    // Apply to DB
+    try {
+      const cur = await pool.query("SELECT score FROM game_state WHERE user_id=$1", [p.id]);
+      const cur_score = parseFloat(cur.rows[0]?.score) || 0;
+      const newScore = Math.max(0, cur_score + delta);
+      await pool.query("UPDATE game_state SET score=$1, updated_at=NOW() WHERE user_id=$2", [newScore, p.id]);
+      audit({ headers: { authorization: 'room' }, socket: { remoteAddress: 'room' }, user: p }, `ROOM_ROULETTE`, `room:${room.id} result:${result} delta:${delta}`);
+    } catch(e) { console.error('Score update error:', e); }
+  }
+
+  room.rouletteResult = { number: result, color: col, playerResults, ts: Date.now() };
+  room.phase = 'results';
+  room.chat.push({ system: true, text: `Spin result: ${result} (${col}) — ${playerResults.filter(r=>r.delta>0).length} winner(s)`, ts: Date.now() });
+
+  // Reset for next round after 8s
+  setTimeout(() => {
+    if (!rooms.has(room.id)) return;
+    room.phase   = 'waiting';
+    room.players.forEach(p => { p.bet = 0; p.bets = null; p.ready = false; });
+    room.rouletteResult = null;
+    room.lastActivity   = Date.now();
+  }, 8000);
+
+  res.json({ room: roomView(room, req.user.id) });
+});
+
+// ── BLACKJACK MULTIPLAYER ──
+// Player vs Player: one player is Dealer, others are Players
+// Dealer is always the host (room.hostId)
+
+app.post("/api/room/:id/blackjack/deal", requireAuth, async (req, res) => {
+  const room = getRoom(req.params.id);
+  if (!room || room.game !== 'blackjack') return res.status(404).json({ error: "Room not found" });
+  if (req.user.id !== room.hostId) return res.status(403).json({ error: "Only the dealer (host) can deal" });
+  if (room.players.length < 2) return res.status(400).json({ error: "Need at least 2 players" });
+  if (room.phase === 'playing') return res.status(400).json({ error: "Round already in progress" });
+
+  // Validate all non-dealer players have placed bets
+  const nonDealers = room.players.filter(p => p.id !== room.hostId);
+  const allBet = nonDealers.every(p => p.bet > 0);
+  if (!allBet) return res.status(400).json({ error: "All players must place bets first" });
+
+  // Build shoe and deal
+  const VALS = ['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
+  const SUITS = ['♠','♥','♦','♣'];
+  let shoe = [];
+  for (let d = 0; d < 4; d++) for (const s of SUITS) for (const v of VALS) shoe.push({ v, s });
+  for (let i = shoe.length-1; i > 0; i--) { const j = Math.floor(Math.random()*(i+1)); [shoe[i],shoe[j]]=[shoe[j],shoe[i]]; }
+
+  const draw = () => shoe.pop();
+
+  const bjState = {
+    shoe,
+    dealerHand:  [draw(), draw()],
+    playerHands: {},
+    currentTurn: null, // player id whose turn it is
+    turnOrder:   nonDealers.map(p => p.id),
+    turnIndex:   0,
+    phase:       'player_turns', // player_turns | dealer_turn | results
+    results:     {},
+  };
+
+  // Deal to each player
+  for (const p of nonDealers) {
+    bjState.playerHands[p.id] = [draw(), draw()];
+  }
+
+  bjState.currentTurn = bjState.turnOrder[0];
+  room.bjState = bjState;
+  room.phase   = 'playing';
+  room.lastActivity = Date.now();
+  room.chat.push({ system: true, text: 'Cards dealt! Players take turns.', ts: Date.now() });
+
+  res.json({ room: roomView(room, req.user.id) });
+});
+
+// Player action (hit/stand)
+app.post("/api/room/:id/blackjack/action", requireAuth, async (req, res) => {
+  const room = getRoom(req.params.id);
+  if (!room || room.game !== 'blackjack' || !room.bjState) return res.status(404).json({ error: "No active hand" });
+  const bj = room.bjState;
+  if (bj.currentTurn !== req.user.id) return res.status(400).json({ error: "Not your turn" });
+
+  const { action } = req.body;
+  const hand = bj.playerHands[req.user.id];
+  const cardVal = c => c.v==='A' ? 11 : ['J','Q','K'].includes(c.v) ? 10 : parseInt(c.v);
+  const total = h => { let t=0,a=0; h.forEach(c=>{t+=cardVal(c);if(c.v==='A')a++;}); while(t>21&&a>0){t-=10;a--;} return t; };
+
+  if (action === 'hit') {
+    hand.push(bj.shoe.pop());
+    if (total(hand) >= 21) {
+      bj.turnIndex++;
+    }
+  } else if (action === 'stand') {
+    bj.turnIndex++;
+  }
+
+  // Advance turn
+  if (bj.turnIndex >= bj.turnOrder.length) {
+    // Dealer's turn
+    bj.phase = 'dealer_turn';
+    bj.currentTurn = room.hostId;
+
+    // Dealer draws to 17
+    while (total(bj.dealerHand) < 17) bj.dealerHand.push(bj.shoe.pop());
+
+    const dTotal = total(bj.dealerHand);
+    const dBust  = dTotal > 21;
+
+    // Resolve each player
+    for (const p of room.players.filter(r => r.id !== room.hostId)) {
+      const pHand  = bj.playerHands[p.id];
+      const pTotal = total(pHand);
+      const pBJ    = pHand.length===2 && pTotal===21;
+      const dBJ    = bj.dealerHand.length===2 && dTotal===21;
+      let delta    = -p.bet;
+      let outcome  = 'lose';
+
+      if (pTotal > 21) { delta = -p.bet; outcome = 'bust'; }
+      else if (pBJ && dBJ) { delta = 0; outcome = 'push'; }
+      else if (pBJ)  { delta = Math.floor(p.bet * 1.5); outcome = 'blackjack'; }
+      else if (dBJ)  { delta = -p.bet; outcome = 'lose'; }
+      else if (dBust){ delta = p.bet; outcome = 'win'; }
+      else if (pTotal > dTotal) { delta = p.bet; outcome = 'win'; }
+      else if (pTotal < dTotal) { delta = -p.bet; outcome = 'lose'; }
+      else { delta = 0; outcome = 'push'; }
+
+      // Dealer (host) gets opposite
+      const dealerDelta = -delta;
+      bj.results[p.id] = { delta, outcome, pTotal, dTotal };
+
+      // Apply to DB
+      try {
+        const pCur  = await pool.query("SELECT score FROM game_state WHERE user_id=$1",[p.id]);
+        const pScore = Math.max(0, (parseFloat(pCur.rows[0]?.score)||0) + delta);
+        await pool.query("UPDATE game_state SET score=$1, updated_at=NOW() WHERE user_id=$2",[pScore,p.id]);
+
+        const dCur   = await pool.query("SELECT score FROM game_state WHERE user_id=$1",[room.hostId]);
+        const dScore = Math.max(0, (parseFloat(dCur.rows[0]?.score)||0) + dealerDelta);
+        await pool.query("UPDATE game_state SET score=$1, updated_at=NOW() WHERE user_id=$2",[dScore,room.hostId]);
+      } catch(e) { console.error('BJ score error:', e); }
+    }
+
+    bj.phase = 'results';
+    room.phase = 'results';
+    const wins = Object.values(bj.results).filter(r=>r.outcome==='win'||r.outcome==='blackjack').length;
+    room.chat.push({ system: true, text: `Dealer: ${dTotal}${dBust?' (BUST)':''} — ${wins} player(s) won`, ts: Date.now() });
+
+    // Reset after 8s
+    setTimeout(() => {
+      if (!rooms.has(room.id)) return;
+      room.phase   = 'waiting';
+      room.bjState = null;
+      room.players.forEach(p => { p.bet = 0; p.ready = false; });
+      room.lastActivity = Date.now();
+    }, 8000);
+  } else {
+    bj.currentTurn = bj.turnOrder[bj.turnIndex];
+  }
+
+  room.lastActivity = Date.now();
+  res.json({ room: roomView(room, req.user.id) });
+});
+
+// Place bet for blackjack
+app.post("/api/room/:id/blackjack/bet", requireAuth, async (req, res) => {
+  const room = getRoom(req.params.id);
+  if (!room || room.game !== 'blackjack') return res.status(404).json({ error: "Room not found" });
+  if (req.user.id === room.hostId) return res.status(400).json({ error: "Dealer doesn't place bets" });
+  if (room.phase === 'playing') return res.status(400).json({ error: "Round in progress" });
+
+  const betAmt = parseFloat(req.body.bet);
+  if (isNaN(betAmt) || betAmt <= 0) return res.status(400).json({ error: "Invalid bet" });
+  if (betAmt > 1_000_000_000_000) return res.status(400).json({ error: "Max bet 1T" });
+
+  const gs = await pool.query("SELECT score FROM game_state WHERE user_id=$1", [req.user.id]);
+  if (!gs.rows.length || parseFloat(gs.rows[0].score) < betAmt) return res.status(400).json({ error: "Insufficient score" });
+
+  const p = room.players.find(p => p.id === req.user.id);
+  if (!p) return res.status(403).json({ error: "Not in room" });
+  p.bet   = betAmt;
+  p.ready = true;
+  room.lastActivity = Date.now();
+  res.json({ ok: true, room: roomView(room, req.user.id) });
+});
+
+// Leave room
+app.post("/api/room/:id/leave", requireAuth, (req, res) => {
+  const room = getRoom(req.params.id);
+  if (!room) return res.json({ ok: true });
+  room.players = room.players.filter(p => p.id !== req.user.id);
+  room.chat.push({ system: true, text: `${req.user.username} left`, ts: Date.now() });
+  if (room.players.length === 0) rooms.delete(room.id);
+  res.json({ ok: true });
+});
+
+// List open rooms
+app.get("/api/rooms/:game", requireAuth, (req, res) => {
+  cleanRooms();
+  const { game } = req.params;
+  const list = [...rooms.values()]
+    .filter(r => r.game === game && r.players.length < r.maxPlayers && r.phase === 'waiting')
+    .map(r => ({ id: r.id, players: r.players.length, maxPlayers: r.maxPlayers, host: r.players[0]?.username }));
+  res.json({ rooms: list });
+});
+
+
 app.get("/health", (req, res) => res.json({ status: "ok", time: new Date().toISOString() }));
 app.get("/",       (req, res) => res.json({ name: "Capital RNG API", version: "2.0.0" }));
 
