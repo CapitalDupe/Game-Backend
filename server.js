@@ -1809,4 +1809,4 @@ app.get("/",       (req, res) => res.json({ name: "Capital RNG API", version: "2
 // ═══════════════════════════════════════
 initDB()
   .then(() => app.listen(PORT, () => console.log(`🚀 Capital RNG API running on port ${PORT}`)))
-  .catch((err) => { console.error("❌ DB init failed:", err); process.exit(1); });
+  .catch((err) => { console.error("❌ DB init failed:", err); process.exit(1); 
