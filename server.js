@@ -169,6 +169,14 @@ async function initDB() {
       result_json JSONB
     );
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS room_blackjack_state (
+      room_id     TEXT PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+      updated_at  BIGINT NOT NULL,
+      state_json  JSONB NOT NULL
+    );
+  `);
+
 
   const migrations = [
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_owner2       BOOLEAN DEFAULT FALSE`,
@@ -1072,6 +1080,7 @@ async function buildRoomPayload(roomId) {
     [roomId]
   );
   const lastQ = await pool.query(`SELECT result_json FROM room_roulette_last WHERE room_id=$1`, [roomId]);
+  const bjQ   = await pool.query(`SELECT state_json FROM room_blackjack_state WHERE room_id=$1`, [roomId]);
 
   const players = playersQ.rows.map(p => ({
     id:       p.user_id,
@@ -1097,7 +1106,7 @@ async function buildRoomPayload(roomId) {
       system:   m.system,
     })),
     rouletteResult: lastQ.rowCount ? lastQ.rows[0].result_json : null,
-    bjState:        null, // Blackjack uses separate flow
+    bjState:        bjQ.rowCount ? bjQ.rows[0].state_json : null,
   };
 }
 
@@ -1394,151 +1403,399 @@ app.post("/api/room/:id/roulette/spin", requireAuth, async (req, res) => {
   }
 });
 
-// ── BLACKJACK MULTIPLAYER (in-memory state per room, DB for score updates) ──
-// Blackjack game state is ephemeral (hand data doesn't need to persist between server restarts)
-const _bjStates = new Map(); // roomId → bjState
 
+// ═══════════════════════════════════════
+//  BLACKJACK MULTIPLAYER — DB-BACKED
+// ═══════════════════════════════════════
+
+// ── BJ helpers ──
+function bjNewDeck(numDecks = 6) {
+  const suits = ["♠","♥","♦","♣"];
+  const vals  = ["A","2","3","4","5","6","7","8","9","10","J","Q","K"];
+  const deck  = [];
+  for (let d = 0; d < numDecks; d++)
+    for (const s of suits) for (const v of vals) deck.push({ v, s });
+  // Fisher-Yates with crypto RNG
+  for (let i = deck.length - 1; i > 0; i--) {
+    const j = crypto.randomInt(0, i + 1);
+    [deck[i], deck[j]] = [deck[j], deck[i]];
+  }
+  return deck;
+}
+
+function bjCardVal(c) {
+  if (c.v === "A") return 11;
+  if (["K","Q","J"].includes(c.v)) return 10;
+  return parseInt(c.v, 10);
+}
+
+function bjHandTotal(hand) {
+  let t = 0, aces = 0;
+  for (const c of hand) { t += bjCardVal(c); if (c.v === "A") aces++; }
+  while (t > 21 && aces > 0) { t -= 10; aces--; }
+  return t;
+}
+
+function bjIsBlackjack(hand) {
+  return hand && hand.length === 2 && bjHandTotal(hand) === 21;
+}
+
+function bjDealerShouldHit(hand) {
+  // Stand on ALL 17s (including soft 17).
+  // Change `< 17` to `< 17 || (isSoft17)` if you want hit-soft-17.
+  return bjHandTotal(hand) < 17;
+}
+
+function bjNextTurn(state) {
+  const idx = state.turnOrder.indexOf(state.currentTurn);
+  for (let i = idx + 1; i < state.turnOrder.length; i++) {
+    const pid  = state.turnOrder[i];
+    const hand = state.playerHands[pid];
+    if (!hand) continue;
+    const t = bjHandTotal(hand);
+    if (t > 21)             continue; // already bust
+    if (bjIsBlackjack(hand)) continue; // natural BJ — no actions needed
+    return pid;
+  }
+  return null; // all players done
+}
+
+async function bjLoadState(roomId) {
+  const q = await pool.query(
+    `SELECT state_json FROM room_blackjack_state WHERE room_id=$1`, [roomId]
+  );
+  return q.rowCount ? q.rows[0].state_json : null;
+}
+
+async function bjSaveState(roomId, state) {
+  await pool.query(
+    `INSERT INTO room_blackjack_state (room_id, updated_at, state_json)
+     VALUES ($1,$2,$3)
+     ON CONFLICT (room_id) DO UPDATE
+     SET updated_at=EXCLUDED.updated_at, state_json=EXCLUDED.state_json`,
+    [roomId, Date.now(), state]
+  );
+}
+
+// ── List open blackjack rooms ──
+app.get("/api/rooms/blackjack", requireAuth, async (req, res) => {
+  try {
+    const q = await pool.query(
+      `SELECT r.id, r.max_players,
+              (SELECT COUNT(*)::int FROM room_players rp WHERE rp.room_id=r.id) AS players,
+              (SELECT rp2.username FROM room_players rp2 WHERE rp2.room_id=r.id ORDER BY rp2.joined_at ASC LIMIT 1) AS host
+       FROM rooms r
+       WHERE r.game='blackjack' AND r.phase IN ('waiting','betting')
+       ORDER BY r.created_at DESC LIMIT 20`
+    );
+    res.json({ rooms: q.rows.map(r => ({ id: r.id, maxPlayers: r.max_players, players: r.players, host: r.host || "" })) });
+  } catch (e) { console.error(e); res.status(500).json({ error: "Server error" }); }
+});
+
+// ── BJ Bet (players only, not dealer) ──
 app.post("/api/room/:id/blackjack/bet", requireAuth, async (req, res) => {
   const roomId = String(req.params.id || "").toUpperCase();
   const user   = req.user;
-  const betAmt = Number(req.body?.bet) || 0;
+  const bet    = Number(req.body?.bet) || 0;
 
-  if (betAmt <= 0 || betAmt > 1_000_000_000_000) return res.status(400).json({ error: "Invalid bet" });
+  if (bet <= 0 || bet > 1_000_000_000_000)
+    return res.status(400).json({ error: "Invalid bet" });
 
   try {
     await pool.query("BEGIN");
-    const roomQ = await pool.query(`SELECT * FROM rooms WHERE id=$1 AND game='blackjack'`, [roomId]);
-    if (!roomQ.rowCount) { await pool.query("ROLLBACK"); return res.status(404).json({ error: "Room not found" }); }
-    if (roomQ.rows[0].host_user_id === user.id) { await pool.query("ROLLBACK"); return res.status(400).json({ error: "Dealer doesn't bet" }); }
-    if (roomQ.rows[0].phase === "playing") { await pool.query("ROLLBACK"); return res.status(400).json({ error: "Round in progress" }); }
 
-    const rpQ = await pool.query(`SELECT bet_total FROM room_players WHERE room_id=$1 AND user_id=$2 FOR UPDATE`, [roomId, user.id]);
+    const roomQ = await pool.query(
+      `SELECT * FROM rooms WHERE id=$1 AND game='blackjack' FOR UPDATE`, [roomId]
+    );
+    if (!roomQ.rowCount) { await pool.query("ROLLBACK"); return res.status(404).json({ error: "Room not found" }); }
+    if (!["waiting","betting"].includes(roomQ.rows[0].phase)) { await pool.query("ROLLBACK"); return res.status(400).json({ error: "Bets closed" }); }
+
+    // Dealer = first joined player
+    const dealerQ = await pool.query(
+      `SELECT user_id FROM room_players WHERE room_id=$1 ORDER BY joined_at ASC LIMIT 1`, [roomId]
+    );
+    const dealerId = dealerQ.rows[0]?.user_id;
+    if (user.id === dealerId) { await pool.query("ROLLBACK"); return res.status(400).json({ error: "Dealer does not bet" }); }
+
+    const rpQ = await pool.query(
+      `SELECT bet_total FROM room_players WHERE room_id=$1 AND user_id=$2 FOR UPDATE`, [roomId, user.id]
+    );
     if (!rpQ.rowCount) { await pool.query("ROLLBACK"); return res.status(403).json({ error: "Not in room" }); }
 
+    // Refund previous bet if re-betting
     const old = Number(rpQ.rows[0].bet_total) || 0;
     if (old > 0) await pool.query(`UPDATE game_state SET score = score + $1 WHERE user_id=$2`, [old, user.id]);
 
+    // Balance check + deduct stake
     const gsQ = await pool.query(`SELECT score FROM game_state WHERE user_id=$1 FOR UPDATE`, [user.id]);
-    if (betAmt > Number(gsQ.rows[0]?.score || 0)) { await pool.query("ROLLBACK"); return res.status(400).json({ error: "Insufficient score" }); }
+    const score = Number(gsQ.rows[0]?.score) || 0;
+    if (bet > score) { await pool.query("ROLLBACK"); return res.status(400).json({ error: "Insufficient score" }); }
 
-    await pool.query(`UPDATE game_state SET score = score - $1, updated_at=NOW() WHERE user_id=$2`, [betAmt, user.id]);
-    await pool.query(`UPDATE room_players SET ready=true, bet_total=$3 WHERE room_id=$1 AND user_id=$2`, [roomId, user.id, betAmt]);
+    await pool.query(`UPDATE game_state SET score = score - $1, updated_at=NOW() WHERE user_id=$2`, [bet, user.id]);
+    await pool.query(
+      `UPDATE room_players SET ready=true, bet_total=$3, bet_json=$4 WHERE room_id=$1 AND user_id=$2`,
+      [roomId, user.id, bet, { bet }]
+    );
+    await pool.query(`UPDATE rooms SET phase='betting' WHERE id=$1 AND phase='waiting'`, [roomId]);
+
     await pool.query("COMMIT");
+    audit(req, 'BJ_BET', `room:${roomId} bet:${bet}`);
     const payload = await buildRoomPayload(roomId);
-    res.json({ ok: true, room: payload });
+    res.json({ room: payload });
   } catch (e) {
     await pool.query("ROLLBACK");
     console.error(e); res.status(500).json({ error: "Server error" });
   }
 });
 
+// ── BJ Deal (dealer only) ──
 app.post("/api/room/:id/blackjack/deal", requireAuth, async (req, res) => {
   const roomId = String(req.params.id || "").toUpperCase();
   const user   = req.user;
 
   try {
-    const roomQ = await pool.query(`SELECT * FROM rooms WHERE id=$1 AND game='blackjack'`, [roomId]);
-    if (!roomQ.rowCount) return res.status(404).json({ error: "Room not found" });
-    if (roomQ.rows[0].host_user_id !== user.id) return res.status(403).json({ error: "Host only" });
+    await pool.query("BEGIN");
 
-    const playersQ = await pool.query(`SELECT * FROM room_players WHERE room_id=$1 ORDER BY joined_at ASC`, [roomId]);
-    const nonDealers = playersQ.rows.filter(p => p.user_id !== user.id);
-    if (!nonDealers.every(p => p.bet_total > 0)) return res.status(400).json({ error: "All players must bet first" });
+    const roomQ = await pool.query(
+      `SELECT * FROM rooms WHERE id=$1 AND game='blackjack' FOR UPDATE`, [roomId]
+    );
+    if (!roomQ.rowCount) { await pool.query("ROLLBACK"); return res.status(404).json({ error: "Room not found" }); }
 
-    const VALS = ['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
-    const SUITS = ['♠','♥','♦','♣'];
-    let shoe = [];
-    for (let d = 0; d < 4; d++) for (const s of SUITS) for (const v of VALS) shoe.push({ v, s });
-    for (let i = shoe.length-1; i > 0; i--) { const j = Math.floor(Math.random()*(i+1)); [shoe[i],shoe[j]]=[shoe[j],shoe[i]]; }
+    const playersQ = await pool.query(
+      `SELECT user_id, username, bet_total FROM room_players WHERE room_id=$1 ORDER BY joined_at ASC`,
+      [roomId]
+    );
+    if (!playersQ.rowCount) { await pool.query("ROLLBACK"); return res.status(400).json({ error: "No players" }); }
 
-    const draw = () => shoe.pop();
-    const bjState = {
-      shoe, dealerHand: [draw(), draw()],
-      playerHands: {}, turnOrder: nonDealers.map(p => p.user_id),
-      turnIndex: 0, phase: 'player_turns', results: {},
+    const dealerId   = playersQ.rows[0].user_id;
+    if (user.id !== dealerId) { await pool.query("ROLLBACK"); return res.status(403).json({ error: "Dealer only" }); }
+
+    const nonDealers = playersQ.rows.slice(1);
+    if (!nonDealers.length) { await pool.query("ROLLBACK"); return res.status(400).json({ error: "Need at least 1 player" }); }
+    if (!nonDealers.every(p => Number(p.bet_total) > 0)) {
+      await pool.query("ROLLBACK");
+      return res.status(400).json({ error: "All players must bet first" });
+    }
+
+    const deck        = bjNewDeck(6);
+    const dealerHand  = [deck.pop(), deck.pop()];
+    const playerHands = {};
+    const bets        = {};
+    const doubled     = {};
+
+    for (const p of nonDealers) {
+      playerHands[p.user_id] = [deck.pop(), deck.pop()];
+      bets[p.user_id]        = Number(p.bet_total) || 0;
+      doubled[p.user_id]     = false;
+    }
+
+    const turnOrder = nonDealers.map(p => p.user_id);
+
+    // Skip any player who has an immediate natural blackjack
+    const firstTurn = (() => {
+      for (const pid of turnOrder) {
+        if (!bjIsBlackjack(playerHands[pid])) return pid;
+      }
+      return null;
+    })();
+
+    const state = {
+      phase:       "player_turns",
+      deck,
+      dealerHand,
+      playerHands,
+      bets,
+      doubled,
+      turnOrder,
+      currentTurn: firstTurn,
+      results:     null,
+      startedAt:   Date.now(),
     };
-    for (const p of nonDealers) bjState.playerHands[p.user_id] = [draw(), draw()];
-    bjState.currentTurn = bjState.turnOrder[0];
 
-    _bjStates.set(roomId, bjState);
-    await pool.query(`UPDATE rooms SET phase='playing' WHERE id=$1`, [roomId]);
-    await pool.query(`INSERT INTO room_chat (room_id,ts,user_id,username,rank,text,system) VALUES ($1,$2,NULL,NULL,NULL,$3,true)`, [roomId, Date.now(), 'Cards dealt!']);
+    // If everyone has naturals, go straight to dealer resolution
+    if (!firstTurn) {
+      state.phase = "dealer_turn";
+      while (bjDealerShouldHit(state.dealerHand)) state.dealerHand.push(state.deck.pop());
+      state.phase = "finished";
+      state.results = await bjSettle(state, roomId, dealerId);
+      await pool.query(`UPDATE rooms SET phase='results' WHERE id=$1`, [roomId]);
+      await pool.query(
+        `UPDATE room_players SET ready=false, bet_total=0, bet_json=NULL WHERE room_id=$1 AND user_id<>$2`,
+        [roomId, dealerId]
+      );
+      setTimeout(async () => {
+        try {
+          await pool.query(`DELETE FROM room_blackjack_state WHERE room_id=$1`, [roomId]);
+          await pool.query(`UPDATE rooms SET phase='waiting' WHERE id=$1 AND phase='results'`, [roomId]);
+        } catch {}
+      }, 8000);
+    } else {
+      await pool.query(`UPDATE rooms SET phase='playing' WHERE id=$1`, [roomId]);
+    }
 
+    await bjSaveState(roomId, state);
+    await pool.query(
+      `INSERT INTO room_chat (room_id,ts,user_id,username,rank,text,system) VALUES ($1,$2,NULL,NULL,NULL,$3,true)`,
+      [roomId, Date.now(), "🃏 Cards dealt! Players take turns."]
+    );
+
+    await pool.query("COMMIT");
+    audit(req, 'BJ_DEAL', `room:${roomId}`);
     const payload = await buildRoomPayload(roomId);
-    payload.bjState = bjState;
     res.json({ room: payload });
-  } catch (e) { console.error(e); res.status(500).json({ error: "Server error" }); }
+  } catch (e) {
+    await pool.query("ROLLBACK");
+    console.error(e); res.status(500).json({ error: "Server error" });
+  }
 });
 
+// ── BJ Action (hit / stand / double) ──
 app.post("/api/room/:id/blackjack/action", requireAuth, async (req, res) => {
   const roomId = String(req.params.id || "").toUpperCase();
   const user   = req.user;
-  const bj     = _bjStates.get(roomId);
-  if (!bj) return res.status(404).json({ error: "No active hand" });
-  if (bj.currentTurn !== user.id) return res.status(400).json({ error: "Not your turn" });
+  const action = String(req.body?.action || "").toLowerCase();
 
-  const { action } = req.body;
-  const cardVal = c => c.v==='A' ? 11 : ['J','Q','K'].includes(c.v) ? 10 : parseInt(c.v);
-  const total   = h => { let t=0,a=0; h.forEach(c=>{t+=cardVal(c);if(c.v==='A')a++;}); while(t>21&&a>0){t-=10;a--;} return t; };
-  const hand    = bj.playerHands[user.id];
+  if (!["hit","stand","double"].includes(action))
+    return res.status(400).json({ error: "Invalid action" });
 
-  if (action === 'hit')   { hand.push(bj.shoe.pop()); if (total(hand) >= 21) bj.turnIndex++; }
-  else if (action === 'stand') { bj.turnIndex++; }
+  try {
+    await pool.query("BEGIN");
 
-  if (bj.turnIndex >= bj.turnOrder.length) {
-    // Dealer draws
-    while (total(bj.dealerHand) < 17) bj.dealerHand.push(bj.shoe.pop());
-    const dTotal = total(bj.dealerHand), dBust = dTotal > 21;
+    const roomQ = await pool.query(
+      `SELECT * FROM rooms WHERE id=$1 AND game='blackjack' FOR UPDATE`, [roomId]
+    );
+    if (!roomQ.rowCount)              { await pool.query("ROLLBACK"); return res.status(404).json({ error: "Room not found" }); }
+    if (roomQ.rows[0].phase !== "playing") { await pool.query("ROLLBACK"); return res.status(400).json({ error: "No active round" }); }
 
-    const rpQ = await pool.query(`SELECT user_id, bet_total FROM room_players WHERE room_id=$1`, [roomId]);
-    const betMap = Object.fromEntries(rpQ.rows.map(p => [p.user_id, Number(p.bet_total) || 0]));
-    const roomQ  = await pool.query(`SELECT host_user_id FROM rooms WHERE id=$1`, [roomId]);
-    const hostId = roomQ.rows[0]?.host_user_id;
+    const dealerQ  = await pool.query(
+      `SELECT user_id FROM room_players WHERE room_id=$1 ORDER BY joined_at ASC LIMIT 1`, [roomId]
+    );
+    const dealerId = dealerQ.rows[0]?.user_id;
+    if (user.id === dealerId) { await pool.query("ROLLBACK"); return res.status(400).json({ error: "Dealer acts automatically" }); }
 
-    for (const uid of bj.turnOrder) {
-      const ph = bj.playerHands[uid];
-      const pTotal = total(ph), pBJ = ph.length===2&&pTotal===21, dBJ = bj.dealerHand.length===2&&dTotal===21;
-      const bet = betMap[uid] || 0;
-      let payout = 0, outcome = 'lose';
+    const state = await bjLoadState(roomId);
+    if (!state)                           { await pool.query("ROLLBACK"); return res.status(400).json({ error: "No BJ state" }); }
+    if (state.phase !== "player_turns")   { await pool.query("ROLLBACK"); return res.status(400).json({ error: "Not player turns" }); }
+    if (state.currentTurn !== user.id)    { await pool.query("ROLLBACK"); return res.status(400).json({ error: "Not your turn" }); }
 
-      if (pTotal > 21)          { outcome = 'bust'; }
-      else if (pBJ && dBJ)      { payout = bet;             outcome = 'push'; }
-      else if (pBJ)             { payout = bet + Math.floor(bet*1.5); outcome = 'blackjack'; }
-      else if (dBJ)             { outcome = 'lose'; }
-      else if (dBust)           { payout = bet * 2;         outcome = 'win'; }
-      else if (pTotal > dTotal) { payout = bet * 2;         outcome = 'win'; }
-      else if (pTotal === dTotal){ payout = bet;             outcome = 'push'; }
-      else                      { outcome = 'lose'; }
+    const hand = state.playerHands[user.id];
+    if (!hand) { await pool.query("ROLLBACK"); return res.status(400).json({ error: "No hand found" }); }
 
-      // Payout to player (stake already deducted)
-      if (payout > 0) await pool.query(`UPDATE game_state SET score=score+$1,updated_at=NOW() WHERE user_id=$2`, [payout, uid]);
+    const bet = Number(state.bets[user.id]) || 0;
 
-      // Dealer gets the profit (what they won from player)
-      const dealerGain = bet - payout;
-      if (dealerGain > 0 && hostId) await pool.query(`UPDATE game_state SET score=score+$1,updated_at=NOW() WHERE user_id=$2`, [dealerGain, hostId]);
-
-      bj.results[uid] = { delta: payout - bet, outcome, pTotal, dTotal };
+    // ── DOUBLE DOWN ──
+    if (action === "double") {
+      if (hand.length !== 2) { await pool.query("ROLLBACK"); return res.status(400).json({ error: "Can only double on 2 cards" }); }
+      const gsQ = await pool.query(`SELECT score FROM game_state WHERE user_id=$1 FOR UPDATE`, [user.id]);
+      const bal = Number(gsQ.rows[0]?.score) || 0;
+      if (bet > bal) { await pool.query("ROLLBACK"); return res.status(400).json({ error: "Insufficient score to double" }); }
+      await pool.query(`UPDATE game_state SET score = score - $1, updated_at=NOW() WHERE user_id=$2`, [bet, user.id]);
+      state.bets[user.id]    = bet * 2;
+      state.doubled[user.id] = true;
+      hand.push(state.deck.pop());
+      state.currentTurn = bjNextTurn(state);
+    }
+    // ── HIT ──
+    else if (action === "hit") {
+      hand.push(state.deck.pop());
+      if (bjHandTotal(hand) >= 21) state.currentTurn = bjNextTurn(state);
+    }
+    // ── STAND ──
+    else if (action === "stand") {
+      state.currentTurn = bjNextTurn(state);
     }
 
-    bj.phase = 'results'; bj.currentTurn = null;
-    await pool.query(`UPDATE rooms SET phase='results' WHERE id=$1`, [roomId]);
-    const wins = Object.values(bj.results).filter(r=>['win','blackjack'].includes(r.outcome)).length;
-    await pool.query(`INSERT INTO room_chat(room_id,ts,user_id,username,rank,text,system) VALUES($1,$2,NULL,NULL,NULL,$3,true)`, [roomId, Date.now(), `Dealer: ${dTotal}${dBust?' (BUST)':''} — ${wins} player(s) won`]);
+    // ── All players done — dealer plays + settle ──
+    if (!state.currentTurn) {
+      state.phase = "dealer_turn";
+      while (bjDealerShouldHit(state.dealerHand)) state.dealerHand.push(state.deck.pop());
+      state.phase   = "finished";
+      state.results = await bjSettle(state, roomId, dealerId);
 
-    setTimeout(async () => {
-      _bjStates.delete(roomId);
-      try {
-        await pool.query(`UPDATE rooms SET phase='waiting' WHERE id=$1 AND phase='results'`, [roomId]);
-        await pool.query(`UPDATE room_players SET ready=false, bet_total=0 WHERE room_id=$1`, [roomId]);
-      } catch { /* room may be gone */ }
-    }, 8000);
-  } else {
-    bj.currentTurn = bj.turnOrder[bj.turnIndex];
+      await pool.query(`UPDATE rooms SET phase='results' WHERE id=$1`, [roomId]);
+      await pool.query(
+        `UPDATE room_players SET ready=false, bet_total=0, bet_json=NULL WHERE room_id=$1 AND user_id<>$2`,
+        [roomId, dealerId]
+      );
+
+      const dTotal = bjHandTotal(state.dealerHand);
+      const dBust  = dTotal > 21;
+      const wins   = Object.values(state.results).filter(r => ["win","blackjack"].includes(r.outcome)).length;
+      await pool.query(
+        `INSERT INTO room_chat (room_id,ts,user_id,username,rank,text,system) VALUES ($1,$2,NULL,NULL,NULL,$3,true)`,
+        [roomId, Date.now(), `Dealer: ${dTotal}${dBust ? " (BUST)" : ""} — ${wins} player(s) won`]
+      );
+
+      // Auto-reset to waiting after 8s
+      setTimeout(async () => {
+        try {
+          await pool.query(`DELETE FROM room_blackjack_state WHERE room_id=$1`, [roomId]);
+          await pool.query(`UPDATE rooms SET phase='waiting' WHERE id=$1 AND phase='results'`, [roomId]);
+        } catch { /* room may be gone */ }
+      }, 8000);
+    }
+
+    await bjSaveState(roomId, state);
+    await pool.query("COMMIT");
+
+    audit(req, `BJ_${action.toUpperCase()}`, `room:${roomId} user:${user.id}`);
+    const payload = await buildRoomPayload(roomId);
+    res.json({ room: payload });
+  } catch (e) {
+    await pool.query("ROLLBACK");
+    console.error(e); res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ── Shared settle function ──
+async function bjSettle(state, roomId, dealerId) {
+  const dealerTotal = bjHandTotal(state.dealerHand);
+  const dealerBust  = dealerTotal > 21;
+  const dealerBJ    = bjIsBlackjack(state.dealerHand);
+  const results     = {};
+
+  for (const pid of state.turnOrder) {
+    const ph    = state.playerHands[pid];
+    const total = bjHandTotal(ph);
+    const bust  = total > 21;
+    const bj    = bjIsBlackjack(ph);
+    const stake = Number(state.bets[pid]) || 0;
+
+    let outcome = "lose";
+    let payout  = 0;
+
+    if (bust) {
+      outcome = "lose";  payout = 0;
+    } else if (bj && !dealerBJ) {
+      outcome = "blackjack"; payout = Math.floor(stake * 2.5); // 3:2 profit → total return 2.5×
+    } else if (bj && dealerBJ) {
+      outcome = "push";  payout = stake;
+    } else if (dealerBJ) {
+      outcome = "lose";  payout = 0;
+    } else if (dealerBust) {
+      outcome = "win";   payout = stake * 2;
+    } else if (total > dealerTotal) {
+      outcome = "win";   payout = stake * 2;
+    } else if (total === dealerTotal) {
+      outcome = "push";  payout = stake;
+    } else {
+      outcome = "lose";  payout = 0;
+    }
+
+    if (payout > 0) {
+      await pool.query(`UPDATE game_state SET score=score+$1, updated_at=NOW() WHERE user_id=$2`, [payout, pid]);
+    }
+
+    const delta = payout - stake; // net profit/loss — what the UI shows
+    results[pid] = { outcome, delta, pTotal: total, dTotal: dealerTotal };
+
+    audit({ headers:{authorization:'room'}, socket:{remoteAddress:'room'}, user:{id:pid,username:pid} },
+      `BJ_SETTLE`, `room:${roomId} pid:${pid} outcome:${outcome} payout:${payout} delta:${delta}`);
   }
 
-  const payload = await buildRoomPayload(roomId);
-  payload.bjState = bj;
-  res.json({ room: payload });
+  return results;
+}
+
 });
 
 // ═══════════════════════════════════════
