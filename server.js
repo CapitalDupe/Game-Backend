@@ -1138,3 +1138,14 @@ app.get("/",       (req, res) => res.json({ name: "Capital RNG API", version: "2
 initDB()
   .then(() => app.listen(PORT, () => console.log(`🚀 Capital RNG API running on port ${PORT}`)))
   .catch((err) => { console.error("❌ DB init failed:", err); process.exit(1); });
+// Get current balance (shared across RNG + casino)
+app.get("/api/game/balance", requireAuth, async (req, res) => {
+  try {
+    const q = await pool.query("SELECT score FROM game_state WHERE user_id=$1", [req.user.id]);
+    const score = q.rowCount ? Number(q.rows[0].score) : 0;
+    return res.json({ score });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
